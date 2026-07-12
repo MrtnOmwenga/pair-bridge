@@ -50,7 +50,14 @@ To add or remove a shared folder, edit the `shared_roots` list in `~/.pairbridge
 }
 ```
 
-Run it:
+Run it, either as a persistent background service (recommended — starts automatically at login, restarts if it crashes):
+
+```sh
+cd laptop
+./install.sh
+```
+
+or manually in the foreground, useful for development:
 
 ```sh
 cd laptop
@@ -58,7 +65,7 @@ python3 -m pip install --user -r requirements.txt
 python3 server.py
 ```
 
-It prints the shared root, port, and auth token on startup — you'll need the token to pair.
+Either way it prints (or, for `install.sh`, the script prints on your behalf) the shared roots, port, and auth token — you'll need the token to pair. To stop the service: `systemctl --user disable --now pairbridge`, or run `./uninstall.sh`.
 
 ## Android app (`/android`)
 
