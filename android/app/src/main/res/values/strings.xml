@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">Pairbridge</string>
+    <string name="pairing_title">Pairbridge</string>
+    <string name="pairing_subtitle">Bring your laptop\'s files to this tablet</string>
+    <string name="hint_host">Laptop address</string>
+    <string name="hint_port">Port</string>
+    <string name="hint_token">Token</string>
+    <string name="action_pair">Pair</string>
+    <string name="status_idle">Not paired yet</string>
+    <string name="status_paired">Connected to %1$s</string>
+    <string name="status_pairing">Connecting…</string>
+    <string name="status_error">%1$s</string>
+</resources>

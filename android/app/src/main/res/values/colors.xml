@@ -1,0 +1,15 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <color name="ic_launcher_background">#1B2836</color>
+    <color name="pairbridge_accent">#4C8DFF</color>
+
+    <color name="bg_top">#1B2836</color>
+    <color name="bg_bottom">#0E1621</color>
+    <color name="surface_card">#22314459</color>
+    <color name="surface_card_stroke">#332F4C6C</color>
+    <color name="text_primary">#F5F7FA</color>
+    <color name="text_secondary">#9AABC2</color>
+    <color name="status_success">#4CD787</color>
+    <color name="status_error">#FF6B6B</color>
+    <color name="status_neutral">#9AABC2</color>
+</resources>
