@@ -1,8 +1,15 @@
 package dev.pairbridge.app
 
+import android.content.Intent
+import android.net.Uri
+import android.os.Build
 import android.os.Bundle
+import android.os.Environment
+import android.provider.Settings
 import android.view.View
 import android.view.animation.DecelerateInterpolator
+import android.widget.ImageView
+import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -17,6 +24,8 @@ import kotlinx.coroutines.withContext
 class PairingActivity : AppCompatActivity() {
 
     private lateinit var credentialStore: CredentialStore
+    private lateinit var shareButton: MaterialButton
+    private lateinit var shareStatusText: TextView
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -33,10 +42,17 @@ class PairingActivity : AppCompatActivity() {
         val tokenInput = findViewById<TextInputEditText>(R.id.tokenInput)
         val statusProgress = findViewById<CircularProgressIndicator>(R.id.statusProgress)
         val statusIcon = findViewById<View>(R.id.statusIcon)
-        val statusText = findViewById<android.widget.TextView>(R.id.statusText)
+        val statusText = findViewById<TextView>(R.id.statusText)
         val pairButton = findViewById<MaterialButton>(R.id.pairButton)
+        shareButton = findViewById(R.id.shareButton)
+        shareStatusText = findViewById(R.id.shareStatusText)
 
-        animateEntrance(logo, title, subtitle, formCard, statusRow)
+        animateEntrance(logo, title, subtitle, formCard, statusRow, findViewById(R.id.shareCard))
+
+        shareButton.setOnClickListener { view ->
+            bounce(view)
+            onShareButtonClicked()
+        }
 
         if (credentialStore.isPaired) {
             hostInput.setText(credentialStore.host)
@@ -72,18 +88,68 @@ class PairingActivity : AppCompatActivity() {
         }
     }
 
-    private enum class State { IDLE, LOADING, SUCCESS, ERROR }
+    override fun onResume() {
+        super.onResume()
+        refreshShareStatus()
+    }
+
+    private fun onShareButtonClicked() {
+        if (!Environment.isExternalStorageManager()) {
+            val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
+                data = Uri.parse("package:$packageName")
+            }
+            startActivity(intent)
+            return
+        }
+        credentialStore.sharingEnabled = !credentialStore.sharingEnabled
+        if (credentialStore.sharingEnabled) {
+            startPairbridgeService()
+        } else {
+            stopService(Intent(this, PairbridgeService::class.java))
+        }
+        refreshShareStatus()
+    }
+
+    private fun startPairbridgeService() {
+        val intent = Intent(this, PairbridgeService::class.java)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            startForegroundService(intent)
+        } else {
+            startService(intent)
+        }
+    }
+
+    private fun refreshShareStatus() {
+        if (!Environment.isExternalStorageManager()) {
+            shareButton.text = getString(R.string.action_grant_access)
+            shareStatusText.text = getString(R.string.share_status_needs_permission)
+            shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+            return
+        }
+        if (credentialStore.sharingEnabled) {
+            shareButton.text = getString(R.string.action_stop_sharing)
+            shareStatusText.text = getString(R.string.share_status_on, TabletFileServer.PORT)
+            shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_success))
+            if (credentialStore.isPaired) startPairbridgeService()
+        } else {
+            shareButton.text = getString(R.string.action_start_sharing)
+            shareStatusText.text = getString(R.string.share_status_off)
+            shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+        }
+    }
+
+    private enum class State { LOADING, SUCCESS, ERROR }
 
     private fun setStatus(
         progress: CircularProgressIndicator,
         icon: View,
-        text: android.widget.TextView,
+        text: TextView,
         state: State,
         message: String,
     ) {
         progress.visibility = if (state == State.LOADING) View.VISIBLE else View.GONE
         icon.visibility = if (state == State.SUCCESS || state == State.ERROR) View.VISIBLE else View.GONE
-        if (icon is android.widget.ImageView) {
+        if (icon is ImageView) {
             val res = if (state == State.SUCCESS) R.drawable.ic_status_success else R.drawable.ic_status_error
             icon.setImageResource(res)
         }

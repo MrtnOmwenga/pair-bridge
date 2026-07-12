@@ -36,6 +36,10 @@ class CredentialStore(context: Context) {
     val isPaired: Boolean
         get() = !host.isNullOrBlank() && !token.isNullOrBlank()
 
+    var sharingEnabled: Boolean
+        get() = prefs.getBoolean(KEY_SHARING_ENABLED, false)
+        set(value) = prefs.edit().putBoolean(KEY_SHARING_ENABLED, value).apply()
+
     fun clear() {
         prefs.edit().clear().apply()
     }
@@ -44,6 +48,7 @@ class CredentialStore(context: Context) {
         private const val KEY_HOST = "host"
         private const val KEY_PORT = "port"
         private const val KEY_TOKEN = "token"
+        private const val KEY_SHARING_ENABLED = "sharing_enabled"
         const val DEFAULT_PORT = 8765
     }
 }

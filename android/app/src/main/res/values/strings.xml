@@ -11,4 +11,13 @@
     <string name="status_paired">Connected to %1$s</string>
     <string name="status_pairing">Connecting…</string>
     <string name="status_error">%1$s</string>
+
+    <string name="share_title">Share tablet files</string>
+    <string name="share_subtitle">Let the laptop browse this tablet\'s Camera, Download, Pictures, and Documents folders</string>
+    <string name="action_grant_access">Grant access</string>
+    <string name="action_start_sharing">Start sharing</string>
+    <string name="action_stop_sharing">Stop sharing</string>
+    <string name="share_status_off">Not sharing</string>
+    <string name="share_status_needs_permission">Needs \"All files access\" permission</string>
+    <string name="share_status_on">Sharing on port %1$d</string>
 </resources>

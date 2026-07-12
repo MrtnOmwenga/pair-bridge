@@ -7,15 +7,21 @@ import android.app.Service
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.os.Build
+import android.os.Environment
 import android.os.IBinder
+import android.util.Log
 import androidx.core.app.NotificationCompat
+import fi.iki.elonen.NanoHTTPD
+import java.io.IOException
 
 /**
- * Background service that keeps pairing state alive so reconnect/backoff logic (added
- * once mDNS discovery lands) has somewhere to live. The DocumentsProvider itself makes
- * its own HTTP calls independently of this service.
+ * Foreground service that hosts [TabletFileServer], the reverse of the laptop's server: it
+ * lets the laptop browse/download from the tablet's own public folders (Camera, Download,
+ * Pictures, Documents), scoped and token-authed the same way the laptop scopes its shares.
  */
 class PairbridgeService : Service() {
+
+    private var server: TabletFileServer? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -29,17 +35,45 @@ class PairbridgeService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, notification)
         }
+        startFileServer()
         return START_STICKY
+    }
+
+    override fun onDestroy() {
+        server?.stop()
+        server = null
+        super.onDestroy()
     }
 
     override fun onBind(intent: Intent?): IBinder? = null
 
+    private fun startFileServer() {
+        if (server != null) return
+        if (!Environment.isExternalStorageManager()) {
+            Log.w(TAG, "not starting tablet file server: All files access not granted")
+            return
+        }
+        val token = CredentialStore(this).token
+        if (token == null) {
+            Log.w(TAG, "not starting tablet file server: not paired yet")
+            return
+        }
+        try {
+            val newServer = TabletFileServer(TabletFileServer.PORT, token)
+            newServer.start(NanoHTTPD.SOCKET_READ_TIMEOUT, false)
+            server = newServer
+            Log.i(TAG, "tablet file server listening on port ${TabletFileServer.PORT}")
+        } catch (e: IOException) {
+            Log.w(TAG, "failed to start tablet file server: ${e.message}")
+        }
+    }
+
     private fun buildNotification(): Notification {
         val credentialStore = CredentialStore(this)
-        val text = if (credentialStore.isPaired) {
-            "Connected to ${credentialStore.host}"
-        } else {
-            "Not paired"
+        val text = when {
+            !credentialStore.isPaired -> "Not paired"
+            server != null -> "Connected to ${credentialStore.host} • sharing tablet files"
+            else -> "Connected to ${credentialStore.host}"
         }
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setContentTitle("Pairbridge")
@@ -61,6 +95,7 @@ class PairbridgeService : Service() {
     }
 
     companion object {
+        private const val TAG = "Pairbridge"
         private const val CHANNEL_ID = "pairbridge_service"
         private const val NOTIFICATION_ID = 1
     }
