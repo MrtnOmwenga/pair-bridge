@@ -1,6 +1,8 @@
 package dev.pairbridge.app
 
+import android.Manifest
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
@@ -10,6 +12,7 @@ import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.ImageView
 import android.widget.TextView
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.lifecycle.lifecycleScope
@@ -26,6 +29,9 @@ class PairingActivity : AppCompatActivity() {
     private lateinit var credentialStore: CredentialStore
     private lateinit var shareButton: MaterialButton
     private lateinit var shareStatusText: TextView
+
+    private val nearbyWifiPermissionLauncher =
+        registerForActivityResult(ActivityResultContracts.RequestPermission()) { refreshShareStatus() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -93,7 +99,17 @@ class PairingActivity : AppCompatActivity() {
         refreshShareStatus()
     }
 
+    private fun hasNearbyWifiPermission(): Boolean {
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
+        return ContextCompat.checkSelfPermission(this, Manifest.permission.NEARBY_WIFI_DEVICES) ==
+            PackageManager.PERMISSION_GRANTED
+    }
+
     private fun onShareButtonClicked() {
+        if (!hasNearbyWifiPermission()) {
+            nearbyWifiPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
+            return
+        }
         if (!Environment.isExternalStorageManager()) {
             val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
                 data = Uri.parse("package:$packageName")
@@ -120,6 +136,12 @@ class PairingActivity : AppCompatActivity() {
     }
 
     private fun refreshShareStatus() {
+        if (!hasNearbyWifiPermission()) {
+            shareButton.text = getString(R.string.action_grant_access)
+            shareStatusText.text = getString(R.string.share_status_needs_permission)
+            shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
+            return
+        }
         if (!Environment.isExternalStorageManager()) {
             shareButton.text = getString(R.string.action_grant_access)
             shareStatusText.text = getString(R.string.share_status_needs_permission)

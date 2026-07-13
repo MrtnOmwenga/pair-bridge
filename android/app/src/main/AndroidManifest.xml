@@ -13,6 +13,12 @@
     <uses-permission
         android:name="android.permission.MANAGE_EXTERNAL_STORAGE"
         tools:ignore="ScopedStorage" />
+    <!-- Android 16+'s local network permission gates both outbound and inbound LAN socket
+         traffic; without it, TabletFileServer accepts a TCP handshake but never delivers the
+         request. neverForLocation since we have no interest in physical positioning. -->
+    <uses-permission
+        android:name="android.permission.NEARBY_WIFI_DEVICES"
+        android:usesPermissionFlags="neverForLocation" />
 
     <application
         android:allowBackup="false"
