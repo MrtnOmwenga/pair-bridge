@@ -84,7 +84,7 @@ def render_unit() -> str:
 Description=Pairbridge: share files with a paired Android device
 
 [Service]
-ExecStart="{sys.executable}" -m pairbridge serve
+ExecStart={sys.executable} -m pairbridge serve
 Restart=on-failure
 RestartSec=5
 

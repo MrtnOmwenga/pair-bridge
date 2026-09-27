@@ -71,7 +71,7 @@ def test_install_writes_unit_for_this_interpreter_and_enables_it(env, capsys):
     _, calls = env
     cli.main(["install", "--yes"])
     unit = cli.unit_path().read_text()
-    assert f"ExecStart={sys.executable} -m pairbridge serve" in unit
+    assert f'ExecStart="{sys.executable}" -m pairbridge serve' in unit
     assert ("enable", "--now", cli.SERVICE) in calls
     assert "Scan pairing code" in capsys.readouterr().out
 
