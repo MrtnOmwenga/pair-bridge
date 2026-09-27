@@ -15,6 +15,8 @@ service or a cable.
 - **Pair by scanning a QR code.** If the PC's IP address changes, the app finds it again over
   mDNS.
 
+![The PC ("fedora") in Android's file picker, showing a Downloads subfolder with thumbnails rendered on the PC](docs/images/picker-thumbnails.jpg)
+
 ## Quick start
 
 **On the PC** (Linux with systemd; tested on Fedora):
@@ -38,6 +40,12 @@ adb install app/build/outputs/apk/debug/app-debug.apk
 
 Open Pairbridge, tap **Scan pairing code**, and scan the QR code. The PC now appears in file
 pickers; **Open laptop files** in the app jumps straight to it.
+
+<img src="docs/images/app-paired.jpg" alt="The Pairbridge app after pairing: connected, with the Open laptop files button" width="720">
+
+Anything shared with **Send to laptop** lands in `~/Downloads/From tablet`:
+
+<img src="docs/images/pc-inbox.jpg" alt="The From tablet folder on the PC with three files sent from the tablet" width="600">
 
 > **Xiaomi / HyperOS:** a first install over adb can fail with `INSTALL_FAILED_USER_RESTRICTED`.
 > Copy the APK instead (`adb push app-debug.apk /sdcard/Download/`) and install it from the Files
