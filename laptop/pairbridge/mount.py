@@ -1,21 +1,15 @@
-"""Mounts the tablet's shared folders (Camera, Download, Pictures, Documents) as a local,
-read-only FUSE filesystem, using the same token issued during laptop->tablet pairing.
+"""`pairbridge mount`: the tablet's shared folders (Camera, Download, Pictures, Documents) as a
+local, read-only FUSE filesystem, using the pairing token.
 
-Requires "tablet_host" (and optionally "tablet_port", default 8766) in
-~/.pairbridge/config.json, set to the tablet's LAN IP (Android: Settings → About → Status).
-
-pyfuse3 needs libfuse3 at runtime; if it's not on the default library search path, run with:
-    LD_LIBRARY_PATH=/usr/lib64 python3 pairbridge_mount.py <mountpoint>
-
-Usage:
-    python3 pairbridge_mount.py <mountpoint>
+Experimental: on HyperOS the tablet's server is unreachable over WiFi (see the README).
+Requires "tablet_host" (and optionally "tablet_port", default 8766) in the config, set to the
+tablet's LAN IP. Needs the "mount" extra, which builds pyfuse3 against libfuse3; if libfuse3 isn't
+on the default library path at runtime, set LD_LIBRARY_PATH=/usr/lib64.
 """
 
 import errno
-import json
 import os
 import stat
-import sys
 import tempfile
 from pathlib import Path
 
@@ -23,7 +17,8 @@ import pyfuse3
 import requests
 import trio
 
-CONFIG_PATH = Path.home() / ".pairbridge" / "config.json"
+from .config import config_path, load_config
+
 DEFAULT_TABLET_PORT = 8766
 
 
@@ -179,25 +174,16 @@ class PairbridgeFS(pyfuse3.Operations):
             pass
 
 
-def load_tablet_client() -> TabletClient:
-    config = json.loads(CONFIG_PATH.read_text())
+def mount(mountpoint: Path) -> None:
+    config = load_config()
     host = config.get("tablet_host")
     if not host:
-        print(f'Set "tablet_host" to the tablet\'s LAN IP in {CONFIG_PATH} first.')
-        sys.exit(1)
-    port = config.get("tablet_port", DEFAULT_TABLET_PORT)
-    return TabletClient(host, port, config["token"])
+        raise SystemExit(f'Set "tablet_host" to the tablet\'s LAN IP in {config_path()} first.')
+    client = TabletClient(host, config.get("tablet_port", DEFAULT_TABLET_PORT), config["token"])
 
-
-def main() -> None:
-    if len(sys.argv) != 2:
-        print("usage: pairbridge_mount.py <mountpoint>")
-        sys.exit(1)
-
-    mountpoint = Path(sys.argv[1])
     mountpoint.mkdir(parents=True, exist_ok=True)
 
-    fs = PairbridgeFS(load_tablet_client())
+    fs = PairbridgeFS(client)
 
     fuse_options = set(pyfuse3.default_options)
     fuse_options.add("fsname=pairbridge")
@@ -207,7 +193,3 @@ def main() -> None:
         trio.run(pyfuse3.main)
     finally:
         pyfuse3.close(unmount=True)
-
-
-if __name__ == "__main__":
-    main()

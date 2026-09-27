@@ -1,117 +1,25 @@
-"""Pairbridge laptop server: shares a configured set of folders with the paired Android app.
+"""The HTTP API the Android app talks to, plus the mDNS announcement that lets it find this PC."""
 
-Usage:
-    python3 server.py          run the server
-    python3 server.py pair     print the pairing QR code for the app to scan
-
-Configuration lives in ~/.pairbridge/config.json (created on first run). Each entry in
-"shared_roots" is {"id", "name", "path"}; "inbox" is where files sent from the tablet's share
-sheet land; the optional "name" overrides the PC name the tablet shows. Restart the server after
-editing it.
-"""
-
-import json
 import logging
 import os
 import secrets
 import shutil
 import socket
-import sys
 import tempfile
 import time
 from contextlib import asynccontextmanager
 from io import BytesIO
 from pathlib import Path
-from urllib.parse import urlencode
 
 import uvicorn
 from fastapi import APIRouter, Depends, FastAPI, Header, HTTPException, Query, Request
 from fastapi.responses import FileResponse, Response
 
-CONFIG_DIR = Path(os.environ.get("PAIRBRIDGE_HOME", Path.home() / ".pairbridge"))
-CONFIG_PATH = CONFIG_DIR / "config.json"
-DEFAULT_PORT = 8765
-DEFAULT_MAX_UPLOAD_BYTES = 4 * 1024**3
+from .config import DEFAULT_MAX_UPLOAD_BYTES, machine_name, primary_ipv4
+
 SERVICE_TYPE = "_pairbridge._tcp.local."
 
-DEFAULT_CANDIDATE_FOLDERS = [
-    ("downloads", "Downloads", Path.home() / "Downloads"),
-    ("documents", "Documents", Path.home() / "Documents"),
-    ("pictures", "Pictures", Path.home() / "Pictures"),
-    ("videos", "Videos", Path.home() / "Videos"),
-]
-
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
 log = logging.getLogger("pairbridge")
-
-
-def default_shared_roots() -> list[dict]:
-    roots = [
-        {"id": root_id, "name": name, "path": str(path)}
-        for root_id, name, path in DEFAULT_CANDIDATE_FOLDERS
-        if path.is_dir()
-    ]
-    if not roots:
-        fallback = Path.home() / "pairbridge"
-        fallback.mkdir(parents=True, exist_ok=True)
-        roots.append({"id": "pairbridge", "name": "Pairbridge", "path": str(fallback)})
-    return roots
-
-
-def write_private(path: Path, text: str) -> None:
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w") as f:
-        f.write(text)
-
-
-def load_config() -> dict:
-    # The token grants read/write access to every shared folder, so the config stays
-    # readable by this user only.
-    CONFIG_DIR.mkdir(mode=0o700, parents=True, exist_ok=True)
-    config = json.loads(CONFIG_PATH.read_text()) if CONFIG_PATH.exists() else {}
-
-    defaults = {
-        "shared_roots": default_shared_roots,
-        "port": lambda: DEFAULT_PORT,
-        "token": lambda: secrets.token_urlsafe(32),
-        "server_id": lambda: secrets.token_hex(8),
-        "max_upload_bytes": lambda: DEFAULT_MAX_UPLOAD_BYTES,
-    }
-    changed = False
-    for key, make_default in defaults.items():
-        if key not in config:
-            config[key] = make_default()
-            changed = True
-    if "inbox" not in config:
-        config["inbox"] = {"root": config["shared_roots"][0]["id"], "path": "From tablet"}
-        changed = True
-
-    if changed:
-        write_private(CONFIG_PATH, json.dumps(config, indent=2))
-    elif CONFIG_PATH.stat().st_mode & 0o077:
-        CONFIG_PATH.chmod(0o600)
-    return config
-
-
-def primary_ipv4() -> str:
-    """The address of the interface that holds the default route, i.e. the one on the LAN."""
-    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as s:
-        # connect() on UDP only picks a route; no packet is sent.
-        s.connect(("192.0.2.1", 9))
-        return s.getsockname()[0]
-
-
-def machine_name() -> str:
-    """The PC's display name: systemd's pretty hostname if set, else the short hostname."""
-    try:
-        for line in Path("/etc/machine-info").read_text().splitlines():
-            if line.startswith("PRETTY_HOSTNAME="):
-                pretty = line.split("=", 1)[1].strip().strip('"')
-                if pretty:
-                    return pretty
-    except OSError:
-        pass
-    return socket.gethostname().split(".")[0]
 
 
 def validate_name(name: str) -> str:
@@ -362,17 +270,17 @@ async def start_advertising(config: dict):
     from zeroconf.asyncio import AsyncZeroconf
 
     server_id = config["server_id"]
-    info = ServiceInfo(
-        SERVICE_TYPE,
-        f"{socket.gethostname()} {server_id[:4]}.{SERVICE_TYPE}",
-        port=config["port"],
-        properties={"id": server_id},
-        # A host name of our own; reusing the machine's hostname would clash with avahi's record.
-        server=f"pairbridge-{server_id}.local.",
-        parsed_addresses=[primary_ipv4()],
-    )
     zc = AsyncZeroconf()
     try:
+        info = ServiceInfo(
+            SERVICE_TYPE,
+            f"{socket.gethostname()} {server_id[:4]}.{SERVICE_TYPE}",
+            port=config["port"],
+            properties={"id": server_id},
+            # A host name of our own; reusing the machine's hostname would clash with avahi's record.
+            server=f"pairbridge-{server_id}.local.",
+            parsed_addresses=[primary_ipv4()],
+        )
         await zc.async_register_service(info)
     except Exception as e:  # discovery is a convenience; the server works without it
         log.warning("mDNS advertising failed: %s", e)
@@ -381,35 +289,6 @@ async def start_advertising(config: dict):
     return zc
 
 
-def print_pairing_code(config: dict) -> None:
-    import segno
-
-    host = primary_ipv4()
-    uri = "pairbridge://pair?" + urlencode(
-        {"host": host, "port": config["port"], "token": config["token"], "id": config["server_id"]}
-    )
-    print("Scan this with the Pairbridge app (Scan pairing code):\n")
-    segno.make(uri, error="m").terminal(compact=True)
-    print(f"\nOr enter it by hand:  address {host}  port {config['port']}  token {config['token']}")
-
-
-def main() -> None:
-    config = load_config()
-    if sys.argv[1:] == ["pair"]:
-        print_pairing_code(config)
-        return
-    if sys.argv[1:]:
-        print(__doc__)
-        sys.exit(2)
-
-    print("Pairbridge server starting")
-    for root in config["shared_roots"]:
-        print(f"  root   : {root['id']} ({root['name']}) -> {root['path']}")
-    print(f"  inbox  : {config['inbox']['root']}/{config['inbox']['path']}")
-    print(f"  port   : {config['port']}")
-    print("  pair a device with: python3 server.py pair")
-    uvicorn.run(create_app(config, advertise=True), host="0.0.0.0", port=config["port"])
-
-
-if __name__ == "__main__":
-    main()
+def serve(config: dict, advertise: bool = True) -> None:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
+    uvicorn.run(create_app(config, advertise=advertise), host="0.0.0.0", port=config["port"])

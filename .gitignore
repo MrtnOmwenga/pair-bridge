@@ -16,3 +16,5 @@ laptop/*.pyc
 # OS
 .DS_Store
 laptop/.pytest_cache/
+laptop/*.egg-info/
+laptop/**/*.egg-info/

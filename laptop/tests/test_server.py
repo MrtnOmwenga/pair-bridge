@@ -1,22 +1,15 @@
-import importlib
 import io
-import os
 import stat
 
 import pytest
 from fastapi.testclient import TestClient
 from PIL import Image
 
+from pairbridge import config as cfg
+from pairbridge.server import create_app
+
 TOKEN = "test-token"
 AUTH = {"Authorization": f"Bearer {TOKEN}"}
-
-
-@pytest.fixture
-def server(tmp_path, monkeypatch):
-    monkeypatch.setenv("PAIRBRIDGE_HOME", str(tmp_path / "home"))
-    import server as module
-
-    return importlib.reload(module)
 
 
 @pytest.fixture
@@ -30,7 +23,7 @@ def shared(tmp_path):
 
 
 @pytest.fixture
-def client(server, shared):
+def client(shared):
     config = {
         "shared_roots": [{"id": "shared", "name": "Shared", "path": str(shared)}],
         "port": 0,
@@ -40,7 +33,7 @@ def client(server, shared):
         "max_upload_bytes": 1024,
         "inbox": {"root": "shared", "path": "From tablet"},
     }
-    return TestClient(server.create_app(config))
+    return TestClient(create_app(config))
 
 
 def test_health_needs_no_token(client):
@@ -170,12 +163,14 @@ def test_thumbnail(client, shared):
     assert r.status_code == 415
 
 
-def test_config_is_private(server):
-    config = server.load_config()
-    assert stat.S_IMODE(server.CONFIG_PATH.stat().st_mode) == 0o600
-    assert stat.S_IMODE(server.CONFIG_DIR.stat().st_mode) == 0o700
+def test_config_is_private(tmp_path, monkeypatch):
+    monkeypatch.setenv("PAIRBRIDGE_HOME", str(tmp_path / "home"))
+    shared = {"id": "s", "name": "S", "path": str(tmp_path)}
+    config = cfg.load_config(choose_roots=lambda candidates: [shared])
+    assert stat.S_IMODE(cfg.config_path().stat().st_mode) == 0o600
+    assert stat.S_IMODE(cfg.home().stat().st_mode) == 0o700
     assert len(config["token"]) >= 40
 
-    server.CONFIG_PATH.chmod(0o644)
-    server.load_config()
-    assert stat.S_IMODE(server.CONFIG_PATH.stat().st_mode) == 0o600
+    cfg.config_path().chmod(0o644)
+    cfg.load_config()
+    assert stat.S_IMODE(cfg.config_path().stat().st_mode) == 0o600

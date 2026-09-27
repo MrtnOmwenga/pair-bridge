@@ -1,0 +1,29 @@
+[build-system]
+requires = ["setuptools>=69"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pairbridge"
+version = "0.2.0"
+description = "Share files between a Linux PC and an Android tablet over the local network"
+requires-python = ">=3.10"
+dependencies = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "zeroconf>=0.130",
+    "segno>=1.6",
+    "pillow>=10",
+]
+
+[project.optional-dependencies]
+mount = ["pyfuse3>=3.3", "trio>=0.22", "requests>=2.31"]
+dev = ["pytest>=8", "httpx>=0.27"]
+
+[project.scripts]
+pairbridge = "pairbridge.cli:main"
+
+[tool.setuptools]
+packages = ["pairbridge"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

@@ -27,7 +27,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** Pairs with the laptop (by scanning the code from `server.py pair`, or by hand) and toggles tablet sharing. */
+/** Pairs with the laptop (by scanning the code from `pairbridge pair`, or by hand) and toggles tablet sharing. */
 class PairingActivity : AppCompatActivity() {
 
     private lateinit var laptop: LaptopConnection
