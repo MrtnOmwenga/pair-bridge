@@ -1,145 +1,154 @@
 # Pairbridge
 
-A lightweight bidirectional file sharing system between a Linux laptop and an Android tablet over the local network.
+Share files between a Linux PC and an Android tablet over the local network, without a cloud
+service or a cable.
 
-- **Laptop → tablet**: the laptop's shared folders show up as a native storage location on Android — in Slack's, WhatsApp's, or any app's file picker — the same way Dropbox or Google Drive would. Fully working.
-- **Tablet → laptop**: the tablet's own folders (Camera, Download, Pictures, Documents) are served over HTTP the same way, meant to be mounted on the laptop as a real folder via FUSE. Server-side code is complete and verified correct, but currently blocked by an unresolved HyperOS network restriction — see Limitations.
+- **Your PC's folders on the tablet.** The PC shows up as a storage location, named after the
+  PC, in every Android file picker (Slack's, WhatsApp's, the Files app), the same way
+  Google Drive does. Browse with thumbnails, open files, attach them anywhere.
+- **Save to the PC from any app.** "Save to", new folder, rename and delete all work on the PC's
+  folders.
+- **Send to PC from the share sheet.** Share photos, files or a link from any app and they land
+  in `~/Downloads/From tablet`.
+- **Pair by scanning a QR code.** If the PC's IP address changes, the app finds it again over
+  mDNS.
 
-## How it works
+## Quick start
 
-```
-Laptop (Fedora)                        Android tablet
-───────────────                        ──────────────
-FastAPI server                    ←──  DocumentsProvider (SAF)
-  - lists configured shared folders      - shows each shared folder in any file picker
-  - serves file downloads                - lists/downloads over HTTP
-  - accepts uploads                      - encrypted token storage (Keystore)
-  - bearer-token auth
-
-FUSE mount (pairbridge_mount.py)  ──→  NanoHTTPD server (TabletFileServer)
-  - mounts tablet folders locally        - serves Camera/Download/Pictures/Documents
-  - reuses the same pairing token        - same token, same path-escape protection
-```
-
-When you tap "Attach" in Slack, Android's file picker opens. A single "Laptop" entry appears in the sidebar; opening it lists the laptop's shared folders (Downloads, Documents, ...) as subfolders. Picking a file streams it to the tablet and hands it straight to Slack — no separate app, no manual copy step.
-
-## Laptop server (`/laptop`)
-
-A FastAPI app exposing:
-
-- `GET  /health` — unauthenticated liveness check
-- `GET  /roots` — list the configured shared folders (names/ids only, never absolute paths)
-- `GET  /files?root=&path=` — list a directory within a shared folder
-- `GET  /files/stat?root=&path=` — metadata for a single file (used to resolve one document without listing its whole parent folder)
-- `GET  /files/download?root=&path=` — download a file
-- `POST /files/upload?root=&path=` — upload a file
-- Bearer token required on every endpoint except `/health`
-
-On first run it creates `~/.pairbridge/config.json` with a random token and seeds `shared_roots` with whichever of Downloads/Documents/Pictures/Videos exist in your home directory. Each root is an independent, named folder — the server resolves every path against the specific root it was addressed under and rejects anything that escapes it (no `../../` traversal), so a leaked token exposes only the folders you've explicitly shared, not your whole home directory.
-
-To add or remove a shared folder, edit the `shared_roots` list in `~/.pairbridge/config.json` (each entry is `{"id", "name", "path"}`) and restart the server:
-
-```json
-{
-  "shared_roots": [
-    {"id": "downloads", "name": "Downloads", "path": "/home/you/Downloads"},
-    {"id": "projects", "name": "Projects", "path": "/home/you/code"}
-  ],
-  "port": 8765,
-  "token": "..."
-}
-```
-
-Run it, either as a persistent background service (recommended — starts automatically at login, restarts if it crashes):
+**On the PC** (Linux with systemd; tested on Fedora):
 
 ```sh
-cd laptop
-./install.sh
+pipx install "git+https://github.com/MrtnOmwenga/pair-bridge#subdirectory=laptop"
+pairbridge install
 ```
 
-or manually in the foreground, useful for development:
+`pairbridge install` asks which of Downloads, Documents, Pictures and Videos to share, installs a
+background service that starts at login, warns if the firewall would block the tablet, and shows
+a pairing QR code.
 
-```sh
-cd laptop
-python3 -m pip install --user -r requirements.txt
-python3 server.py
-```
-
-Either way it prints (or, for `install.sh`, the script prints on your behalf) the shared roots, port, and auth token — you'll need the token to pair. To stop the service: `systemctl --user disable --now pairbridge`, or run `./uninstall.sh`.
-
-## Android app (`/android`)
-
-Kotlin, built with Gradle. Key pieces:
-
-- `PairingActivity` — one-time setup: enter the laptop's address/port and the token printed by the server, verified against `/health` and stored encrypted (Android Keystore via `EncryptedSharedPreferences`)
-- `LaptopDocumentsProvider` — implements Android's `DocumentsProvider` interface (`queryRoots` / `queryChildDocuments` / `openDocument` / `openDocumentThumbnail`). This is what makes "Laptop" appear in file pickers system-wide. Downloads stream through a pipe rather than fully buffering, so large files don't get loaded into memory first. Also generates real thumbnails (downsampled + cached) so pickers show correct previews instead of falling back to a full-resolution read.
-- `LaptopClient` — thin OkHttp wrapper around the server's endpoints; a single instance is cached and reused per pairing so repeated requests share one pooled TCP connection. Runs three separate request queues (interactive stat/list/download, thumbnail fetches, background preload) so a burst of thumbnail or preload traffic can never queue in front of a request the user is actively waiting on.
-- `PreloadCache` — on-disk cache keyed by `(root, path, size, mtime)`. When a folder is listed, files under `MAX_PRELOAD_BYTES` (10MB, see the constant in `LaptopDocumentsProvider`) download to local storage in the background; opening an already-cached file is served straight from disk with zero network calls. Because the cache key encodes the exact size/mtime seen at listing time, a changed file is detected (and re-fetched) the next time its folder is browsed — freshness is checked at browse time, not at open time, which is what avoids blocking a tap on the network.
-- `CredentialStore` — encrypted storage for host/port/token, plus a `sharingEnabled` flag for the tablet→laptop server
-- `PairbridgeService` — foreground service hosting `TabletFileServer` (see below)
-- `TabletFileServer` — a NanoHTTPD server mirroring the laptop's endpoint shapes (`/roots`, `/files`, `/files/stat`, `/files/download`), scoped to the tablet's Camera/Download/Pictures/Documents folders, reusing the same pairing token
-
-Build and install:
+**On the tablet**, build and install the app (Android 8+):
 
 ```sh
 cd android
 ./gradlew assembleDebug
-adb install -r app/build/outputs/apk/debug/app-debug.apk
+adb install app/build/outputs/apk/debug/app-debug.apk
 ```
 
-If `adb install` fails with `INSTALL_FAILED_USER_RESTRICTED` on Xiaomi/HyperOS devices, push the APK and install it manually instead — the ADB-triggered install dialog on some HyperOS builds crashes itself before you can tap it:
+Open Pairbridge, tap **Scan pairing code**, and scan the QR code. The PC now appears in file
+pickers; **Open laptop files** in the app jumps straight to it.
 
-```sh
-adb push app/build/outputs/apk/debug/app-debug.apk /sdcard/Download/
-# then open it from the Files app and tap Install
+> **Xiaomi / HyperOS:** a first install over adb can fail with `INSTALL_FAILED_USER_RESTRICTED`.
+> Copy the APK instead (`adb push app-debug.apk /sdcard/Download/`) and install it from the Files
+> app; later updates install over adb normally. Xiaomi's own file manager doesn't list other
+> apps' storage locations, so use **Open laptop files** or any app's file picker.
+
+## The `pairbridge` command
+
+| Command | What it does |
+|---|---|
+| `pairbridge install` | Run the server in the background at login, then show the pairing code |
+| `pairbridge pair` | Show the pairing QR code again (`--show-token` to pair by hand) |
+| `pairbridge status` | Whether the service is running, the address, PC name, inbox and shared folders |
+| `pairbridge share list` / `add <folder>` / `remove <id>` | Choose what the tablet can see; applies immediately |
+| `pairbridge logs` | Follow the service's log |
+| `pairbridge serve` | Run the server in the foreground |
+| `pairbridge uninstall [--purge]` | Remove the service (`--purge` also deletes the config and pairing) |
+| `pairbridge mount <dir>` | Experimental: mount the tablet's folders (see [Limitations](#limitations)) |
+
+Configuration lives in `~/.pairbridge/config.json`. Set `"name"` there to change how the PC is
+labelled on the tablet (the default is the PC's hostname).
+
+## Design
+
+```
+PC (Linux)                                   Android tablet
+──────────                                   ──────────────
+FastAPI server  ◄─── list / download ─────── DocumentsProvider (Storage Access Framework)
+  shared-folder allowlist                      every file picker sees the PC as a root
+  bearer-token auth       ◄─── write / create / rename / delete
+  thumbnails (Pillow)
+  inbox for sent files    ◄─── upload ────── Share-sheet activity ("Send to laptop")
+  mDNS announcement       ···· discovery ··· finds the PC after its IP changes
 ```
 
-## Tablet → laptop (mounting the tablet's files)
+**The tablet only ever opens connections to the PC.** HyperOS silently drops inbound connections
+to regular apps over WiFi ([investigation](docs/hyperos-wifi-investigation.md)), so every shipped
+feature is built on outbound requests: sending to the PC is an upload from the tablet rather than
+the PC pulling from a server on the tablet.
 
-The tablet can also serve its own folders back to the laptop. In the app, under "Share tablet files": grant "All files access" when prompted, then tap to start sharing — this starts `PairbridgeService`, which runs `TabletFileServer` on port 8766 using the same pairing token.
+Decisions worth knowing about:
 
-On the laptop, mount those folders as a real local directory:
+- **Opening a file shouldn't wait on the network.** Android's WiFi radio powers down after a few
+  seconds idle, and the next packet costs 1–3 s regardless of size (measured by matching server
+  and app log timestamps). When a folder is listed, files under 10 MB download in the background
+  into a cache keyed by path, size and modification time, so a tap is served from disk. The
+  trade-off: a file changed on the PC is only noticed when its folder is listed again.
+- **Background work can't slow the file you tapped.** Preloads run one at a time and thumbnail
+  fetches are capped at three, leaving bandwidth and connections for interactive requests.
+  Thumbnails are rendered on the PC, so scrolling a photo folder transfers kilobytes, not
+  full-size images.
+- **Streams, not copies.** Downloads and writes go through pipes between the app and the HTTP
+  connection, so large files never sit in memory or in a temp copy on the tablet. Failures are
+  reported through the pipe, so an app never receives a truncated file as if it were complete.
+- **Writes on the PC are atomic.** Uploads go to a temp file that's renamed into place once the
+  body is complete; a dropped connection leaves the original file untouched. Files sent to the
+  inbox never overwrite each other (`IMG.jpg`, `IMG (1).jpg`, ...).
+
+### HTTP API
+
+All endpoints except `/health` need `Authorization: Bearer <token>`. Paths are relative to a
+shared folder (`root`).
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /roots` | Shared folders, plus the PC's name and id |
+| `GET /files`, `GET /files/stat` | List a folder, describe one entry |
+| `GET /files/download`, `GET /files/thumb` | File content, JPEG thumbnail |
+| `PUT /files/content` | Replace a file's content (streamed, atomic) |
+| `POST /files/create`, `POST /files/rename`, `DELETE /files` | Folder and file management |
+| `POST /inbox` | Receive a file from the share sheet |
+
+## Security model
+
+- **Only the folders you share are visible.** Every path is resolved against its shared folder
+  and rejected if it escapes, including through symlinks. Your home folder as a whole can't be
+  shared.
+- **Pairing token.** A 256-bit random token, compared in constant time. On the PC it's stored in
+  `~/.pairbridge/config.json`, readable only by your user; on the tablet it's encrypted with an
+  Android Keystore key. It's only displayed when you run `pairbridge pair`.
+- **Not protected against others on your WiFi.** Traffic is plain HTTP, so someone on the same
+  network who captures the token can read and change your shared folders. Use Pairbridge on
+  networks you trust, and share only what you need. TLS with the certificate pinned through the
+  QR code is on the [roadmap](ROADMAP.md).
+
+## Limitations
+
+- Plain HTTP on the local network; see the security model.
+- Apps that edit a file in place ("rw" mode) can't save to the PC; saving a new or replaced file
+  works.
+- **Tablet → PC mounting is experimental.** `pairbridge mount` needs the app's "Share tablet
+  files" server, which HyperOS blocks over WiFi. Use **Send to laptop** instead.
+- The PC side needs Linux with systemd for `pairbridge install`; `pairbridge serve` runs anywhere
+  Python does.
+
+## Development
+
+```
+laptop/     the pairbridge Python package (FastAPI server, CLI, config) and its tests
+android/    the Kotlin app (DocumentsProvider, share activity, pairing, mDNS discovery)
+docs/       design notes and investigations
+```
 
 ```sh
 cd laptop
-python3 -m pip install --user requests
-sudo dnf install fuse3-devel   # Debian/Ubuntu: libfuse3-dev
-python3 -m pip install --user pyfuse3
-
-# add to ~/.pairbridge/config.json: "tablet_host": "<tablet's LAN IP>"
-
-python3 pairbridge_mount.py ~/pairbridge-tablet
-# if pyfuse3 can't find libfuse3 at runtime:
-LD_LIBRARY_PATH=/usr/lib64 python3 pairbridge_mount.py ~/pairbridge-tablet
+python3 -m venv .venv && .venv/bin/pip install -e '.[dev]'
+.venv/bin/pytest
 ```
 
-**Known issue — not yet working over WiFi.** The tablet's server is verified correct (instant, correct responses over USB via `adb forward`), but connections to its WLAN IP hang indefinitely at the TCP level, even from the tablet connecting to itself.
+The tests cover authentication, path-traversal and symlink escapes, atomic writes, upload limits,
+collision-free naming, thumbnails, config file permissions and the CLI. CI runs them and builds the
+APK on every push.
 
-Ruled out: WLAN/background-data app permissions (both granted), battery restrictions ("No restrictions"), IPv6-only binding (kernel dual-stack is enabled; `TabletFileServer` binds `0.0.0.0` explicitly regardless, as reasonable hygiene), Android 16's `NEARBY_WIFI_DEVICES`/local-network permission (declared, confirmed `granted=true` via `dumpsys package`, no change), and Android 13+ Restricted Settings (explicitly allowed via Settings → Apps → Pairbridge → ⋮ → Allow restricted settings, no change).
+## License
 
-**Confirmed *not* a blanket network firewall**: a bare `nc -l -p 9999` listener started via `adb shell` (running as the `shell` UID, not a regular app) was reached instantly and correctly from the laptop over the same WiFi network. So whatever's blocking this is specific to how HyperOS treats a regular installed app's process/socket — not the network path itself. The app was installed via `com.google.android.packageinstaller` (sideloaded, not Play Store/GetApps), which is the one remaining correlation that hasn't been fully eliminated, though the two most relevant sideloading-related mechanisms (local-network permission, Restricted Settings) have both been tried without effect.
-
-Root cause remains unidentified. Further progress likely needs root-level diagnostics (logcat shows no denial reason at all) or input from someone who's independently hit this exact behavior on HyperOS. `pairbridge_mount.py` itself has not been exercised end-to-end against a live tablet yet — verified independently: it imports cleanly, `PairbridgeFS` instantiates correctly as a `pyfuse3.Operations` subclass, and `TabletFileServer` was confirmed to serve requests correctly once reachable (over USB).
-
-## Pairing
-
-1. Start the laptop server; note the token it prints.
-2. Open the app, enter the laptop's LAN IP, port (default `8765`), and the token.
-3. Tap Pair — the app verifies it can reach `/health` and stores the credentials.
-
-There's no PIN exchange or mDNS discovery yet (see Limitations) — pairing is manual, token-based.
-
-## What's shared
-
-Only the folders listed in `shared_roots` are visible to the tablet, and each is scoped independently — the app shows one sidebar entry per configured folder. This is the main safeguard against a leaked token: rather than trusting HTTPS (see below) to keep the connection private, exposure is capped to whatever folders you've explicitly opted in, which is why the defaults are Downloads/Documents/Pictures/Videos rather than the whole home directory.
-
-## Current limitations
-
-- **Cleartext HTTP only**, scoped to trusted local networks (`android:usesCleartextTraffic="true"`) — there's no TLS. The security model leans on network trust + token auth + the folder allowlist above rather than encryption; add TLS later if this ever needs to run over an untrusted network.
-- **No PIN pairing or mDNS discovery yet** — you enter the laptop's IP and the printed token by hand.
-- **No reconnect/backoff logic** — each SAF call makes its own HTTP request independently; nothing retries a dropped connection.
-- **Laptop → tablet is read-only from the tablet's perspective** — the laptop server has an upload endpoint, but the Android app doesn't call it yet.
-- **Folder management is laptop-side only** — add/remove shared folders by editing the laptop's config file; there's no admin UI on the tablet.
-- **Cached files can be briefly stale** — a file preloaded/cached on the tablet is only checked for changes the next time its parent folder is browsed, not at the moment it's opened. A file edited on the laptop in between will serve the old cached copy until you re-browse that folder. This trade is deliberate: checking freshness at open time would mean a network round trip right when you tap, which is the exact delay the caching exists to avoid — see the note on WiFi radio wake latency below.
-- **Occasional multi-second delay on first tap after idle** — confirmed (via matching timestamps between server and app logs) to be Android's WiFi radio powering down after a couple of seconds of inactivity; waking it back up for the next packet can cost 1-3s regardless of payload size, at the OS/driver level, outside the app's control. The preload cache sidesteps this for anything already browsed this session; a cold first request to an unvisited folder can still hit it.
-- **Tablet → laptop doesn't work over WiFi yet** — see the "Tablet → laptop" section above; the server works correctly (verified over USB) but WLAN connections to it hang, likely a HyperOS-specific restriction not yet identified.
+[MIT](LICENSE)

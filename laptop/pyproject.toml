@@ -7,6 +7,7 @@ name = "pairbridge"
 version = "0.2.0"
 description = "Share files between a Linux PC and an Android tablet over the local network"
 requires-python = ">=3.10"
+license = "MIT"
 dependencies = [
     "fastapi>=0.115",
     "uvicorn[standard]>=0.30",

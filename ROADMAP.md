@@ -1,79 +1,84 @@
 # Roadmap
 
-Design notes for planned features, written before implementation so the architecture is settled first. None of what's below is built yet.
+Design notes for planned work, written before implementation so the architecture is settled
+first. Every feature keeps to the rule the shipped ones follow: **the tablet only opens outbound
+connections**, because HyperOS blocks inbound ones
+([investigation](docs/hyperos-wifi-investigation.md)).
 
----
+## Done
 
-## Notification syncing
+- Laptop → tablet file access in every Android file picker, with thumbnails and a preload cache
+- Writing from the tablet: save, new folder, rename, delete
+- "Send to laptop" from the share sheet
+- QR pairing, and finding the PC again over mDNS when its address changes
+- The `pairbridge` CLI: install as a service, pair, status, manage shared folders
 
-**Goal:** surface tablet notifications on the laptop (and vice versa), without duplicating notifications that already fire natively on both devices (e.g. calendar), and without hiding something important because of a wrong guess about which device you're using.
+## Next
 
-### Direction
+### TLS with a pinned certificate
 
-The tablet reads its own notifications via Android's `NotificationListenerService` API (a real, first-party API — this is how Pushbullet/KDE Connect/Join do it; requires the user to grant "Notification access" once in Settings). It then **pushes** each notification to the laptop's existing FastAPI server as an outbound HTTP POST.
+Traffic is plain HTTP today, so anyone on the same WiFi who captures the token gets read/write
+access to the shared folders. Plan: the server generates a self-signed certificate on first run,
+and the pairing QR code carries its SHA-256 fingerprint. The app pins that fingerprint in OkHttp
+(`CertificatePinner` with a trust manager that accepts only the pinned key), so there is no CA
+and no trust-on-first-use prompt. Manual pairing shows the fingerprint to compare.
 
-This deliberately avoids the tablet needing to accept an inbound connection — see [[feedback-pairbridge-hyperos-constraints]] for why that direction is currently unreliable on this tablet. The laptop side just needs a small listener that receives the POST and shows a native desktop notification (`notify-send` or similar) plus a system tray/AppIndicator icon for a running-in-background presence.
+### Clipboard drop zone
 
-### Presence-based routing
+Explicit, on-demand clipboard exchange, not background sync: Android 10+ blocks background
+clipboard reads, and there is no way around that for an ordinary app.
 
-Each device reports a lightweight heartbeat to the laptop's server: `{device: "tablet"|"laptop", active: bool, last_input_ts: ...}`, where `active` is derived from screen-on state + recent input. There's no reliable way to distinguish "half-watching a show" from "actively working" — any heuristic here will sometimes be wrong.
+- **PC → tablet:** `pairbridge clip` reads the PC clipboard (`wl-paste` / `xclip`) and posts it
+  to the server; the app fetches it when its clipboard screen opens and places it on the tablet
+  clipboard, ready to paste.
+- **Tablet → PC:** text pasted into a field in the app (or shared with "Send to laptop") is
+  posted to the server, which writes it to the PC clipboard (`wl-copy` / `xclip`).
 
-Design principle: **never suppress, only add.** A notification always fires natively on the device it originated on (free, zero risk of hiding something). It's *additionally* forwarded to the other device only when that device's heartbeat looks active. Worst case is a redundant ping, not a missed notification.
+### Publish to PyPI
 
-### Avoiding calendar (and similar) double-notification
+So installing is `pipx install pairbridge` instead of a git URL. Needs a release workflow and a
+decision on versioning the app and the PC package together.
 
-The duplicate isn't caused by our forwarding — it's the same calendar account notifying natively on both devices already. Two options, not mutually exclusive:
+## Later
 
-1. **Zero-code fix:** turn off calendar notifications on whichever device you check less. Recommended as the default answer.
-2. **Automatic:** maintain an exclude-list of app packages (calendar apps, and anything else that's known to already notify on both devices) that the forwarder simply never forwards, since forwarding would be pure duplication. Cheap to build once (1) proves insufficient.
+### Editing files in place
 
-### Open questions for implementation
+Apps that open a document in "rw" mode (in-place editors) can't save to the PC, because writes
+stream through a pipe, which isn't seekable. Supporting it means staging a local copy, uploading
+it when the app closes the file, and reporting a failed upload after the app has already moved
+on (a notification).
 
-- Notification content sometimes contains sensitive info (message previews) — decide whether to forward full content or just "you have a notification from Slack, go check" style summaries.
-- Need a small persistent laptop-side process (tray icon) — decide GTK/Qt/whatever fits the desktop environment.
+### Notification syncing
 
----
+Surface tablet notifications on the PC. The tablet reads its own notifications with
+`NotificationListenerService` (the approach KDE Connect and Pushbullet use; the user grants
+"Notification access" once) and pushes each one to the PC server, which shows it with
+`notify-send`.
 
-## Clipboard drop zone (scoped-down, intentional sync)
+- **Presence-based routing, never suppression.** A notification always fires on the device it
+  came from; it's additionally forwarded only when the other device looks active (screen on,
+  recent input). The worst case is a duplicate, never a missed notification.
+- **Duplicates from apps that notify on both devices** (calendar): an exclude list of packages
+  that are never forwarded.
+- Open question: forward full content (message previews can be sensitive) or only "new
+  notification from Slack".
 
-**Goal:** explicitly push clipboard content between devices on demand — not a transparent background sync (Android blocks background clipboard *reads* since Android 10 specifically to prevent silent clipboard-sniffing by apps; there's no way around this for an unprivileged app). The scoped-down version sidesteps that restriction entirely:
+### Cross-device app triggers
 
-### Laptop → tablet
+Click an icon on the PC to open an app on the tablet. This can ride Android's own wireless
+debugging (`adb connect`, then `adb shell am start -n <package>/<activity>`) rather than
+Pairbridge's server. Caveat: some ROMs switch wireless debugging off after a reboot and change its
+port, so the script has to fail with a clear message rather than hang. Worth a short spike on the
+target tablet first.
 
-1. Laptop reads its own clipboard on demand (unrestricted) when you trigger a "push" action, and POSTs it to its own server's `/clipboard` endpoint (in-process, trivial).
-2. Tablet **polls** `/clipboard` (outbound from tablet — the safe, proven direction) when you open the app's clipboard screen, or on a lightweight periodic poll if that turns out to be reliable in the background.
-3. On new content, the app writes it into the tablet's system clipboard (`ClipboardManager.setPrimaryClip()` — writing from a foreground-ish context is fine, no special permission needed).
-4. You paste manually (Ctrl+V equivalent) on the tablet.
+### The tablet's own server
 
-### Tablet → laptop
+`TabletFileServer` and `pairbridge mount` exist for tablet → PC browsing, but HyperOS blocks
+them and "Send to laptop" covers the main need. They also require the broad "All files access"
+permission and depend on NanoHTTPD, which is no longer maintained. Decide whether to fix this
+path on other devices or remove it.
 
-1. You explicitly paste into a text field **inside the Pairbridge app** (a normal foreground text field — this deliberately avoids ever reading Android's system clipboard programmatically, which is the part that's restricted).
-2. The app POSTs that text to the laptop's server (outbound from tablet again).
-3. A small laptop-side listener writes it into the laptop's clipboard (`wl-copy` on Wayland / `xclip -selection clipboard` on X11 — unrestricted).
+## Out of scope
 
-Neither direction needs the tablet to accept an inbound connection, so this works regardless of whether the HyperOS restriction ([[feedback-pairbridge-hyperos-constraints]]) ever gets resolved.
-
----
-
-## Cross-device app triggers (desktop icon → open an app on the tablet)
-
-**Goal:** click an icon on the laptop desktop, have it open a specific app (Slack, the notes app, ...) on the tablet.
-
-**Feasible, and doesn't touch our custom server at all** — it rides Android's own ADB, not our HTTP infrastructure:
-
-```sh
-adb shell am start -n com.Slack/<launch-activity>
-```
-
-For this to work without a USB cable, the tablet needs **Wireless debugging** enabled (Settings → Developer options → Wireless debugging, Android 11+ — not the older `adb tcpip` approach, which needs USB to bootstrap every session). Wireless debugging pairs once via a 6-digit code (`adb pair <ip>:<port>`), and the pairing (trusted key) persists — reconnecting afterward is just `adb connect <ip>:<port>`, no cable needed. As a first-party Android feature (not a third-party app's listening socket), it's plausibly unaffected by whatever HyperOS restriction is blocking our own server, though that's not yet confirmed empirically.
-
-**Caveat, honestly:** some ROMs turn Wireless debugging back off after a reboot as a security default (pairing survives, but the toggle itself may need re-enabling, and the port can change each time it's re-enabled). A desktop-icon script would attempt `adb connect` automatically and fail gracefully with a clear message ("enable Wireless debugging on the tablet") rather than hang — this isn't a fully invisible, zero-maintenance flow, but it's a real, buildable one.
-
-**Status:** not started. Confirmed feasible in principle; worth a short spike to verify Wireless debugging actually survives this specific tablet's reboot/security behavior before building the desktop-icon tooling around it.
-
----
-
-## Explicitly out of scope for this project (for now)
-
-- **Hourly note-check reminder** — this is really a personal reminder/cron tool, not a cross-device sync feature; better as its own small unrelated script.
-- **Screen mirroring / casting the tablet** — [`scrcpy`](https://github.com/Genymobile/scrcpy) already solves this well; no need to build our own.
+- **Screen mirroring:** [scrcpy](https://github.com/Genymobile/scrcpy) already does it well.
+- **Reminders and other single-device tools:** not cross-device features.
