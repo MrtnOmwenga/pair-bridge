@@ -64,6 +64,23 @@
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/subtitle">
 
+            <com.google.android.material.button.MaterialButton
+                android:id="@+id/scanButton"
+                style="@style/PairbridgeButton"
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:text="@string/action_scan" />
+
+            <TextView
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:layout_marginTop="18dp"
+                android:layout_marginBottom="4dp"
+                android:gravity="center"
+                android:text="@string/or_enter_manually"
+                android:textColor="@color/text_secondary"
+                android:textSize="13sp" />
+
             <com.google.android.material.textfield.TextInputLayout
                 android:id="@+id/hostLayout"
                 style="@style/PairbridgeTextInput"
@@ -115,7 +132,7 @@
 
             <com.google.android.material.button.MaterialButton
                 android:id="@+id/pairButton"
-                style="@style/PairbridgeButton"
+                style="@style/Widget.Material3.Button.OutlinedButton"
                 android:layout_width="match_parent"
                 android:layout_height="wrap_content"
                 android:layout_marginTop="22dp"

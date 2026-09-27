@@ -6,24 +6,21 @@ import android.webkit.MimeTypeMap
 import fi.iki.elonen.NanoHTTPD
 import java.io.File
 import java.io.FileInputStream
+import java.security.MessageDigest
 import org.json.JSONArray
 import org.json.JSONObject
 
 /**
- * Mirrors the laptop's FastAPI server (same endpoint shapes, same shared-root scoping and
- * path-escape protection) so the laptop can browse/download from the tablet's public folders
- * the same way the tablet browses the laptop's. Auth reuses the token issued during pairing —
- * the laptop already knows it, since it generated it.
+ * The reverse of the laptop server: serves the tablet's public folders with the same endpoint
+ * shapes, path-escape protection and pairing token, for the laptop's FUSE mount.
  *
- * Known issue: on this HyperOS build, connections to the bound WLAN IP hang indefinitely at
- * the TCP level (works fine over loopback/USB) even with WLAN + background-data permissions
- * granted and battery restrictions disabled. Root cause not yet found — likely an
- * undocumented HyperOS restriction on inbound connections to a third-party app's listening
- * socket. Binding explicitly to "0.0.0.0" here (rather than the wildcard default) was one
- * hypothesis tried and ruled out (kernel dual-stack was already fine); left in as reasonable
- * hygiene, not a fix.
+ * Known issue: on HyperOS, connections to this server over WiFi hang at the TCP level while the
+ * same requests over USB (adb forward) work. See the README; ShareActivity is the working
+ * tablet -> laptop path.
  */
-class TabletFileServer(port: Int, private val token: String) : NanoHTTPD("0.0.0.0", port) {
+class TabletFileServer(port: Int, token: String) : NanoHTTPD("0.0.0.0", port) {
+
+    private val expectedAuth = "Bearer $token".toByteArray()
 
     private val roots: Map<String, Pair<String, File>> = buildMap {
         fun add(id: String, name: String, dir: String) {
@@ -44,7 +41,8 @@ class TabletFileServer(port: Int, private val token: String) : NanoHTTPD("0.0.0.
             return jsonResponse(Response.Status.OK, JSONObject().put("status", "ok"))
         }
 
-        if (session.headers["authorization"] != "Bearer $token") {
+        val presented = session.headers["authorization"].orEmpty().toByteArray()
+        if (!MessageDigest.isEqual(presented, expectedAuth)) {
             return jsonResponse(Response.Status.UNAUTHORIZED, JSONObject().put("detail", "invalid or missing token"))
         }
 
@@ -110,7 +108,8 @@ class TabletFileServer(port: Int, private val token: String) : NanoHTTPD("0.0.0.
         val target = resolvePath(root, path)
         if (!target.isFile) throw ApiException(Response.Status.NOT_FOUND, "not found")
         val response = newFixedLengthResponse(Response.Status.OK, mimeTypeFor(target.name), FileInputStream(target), target.length())
-        response.addHeader("Content-Disposition", "attachment; filename=\"${target.name}\"")
+        val quotedName = target.name.replace("\\", "_").replace("\"", "_")
+        response.addHeader("Content-Disposition", "attachment; filename=\"$quotedName\"")
         return response
     }
 

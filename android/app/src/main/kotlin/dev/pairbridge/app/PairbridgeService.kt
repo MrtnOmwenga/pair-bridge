@@ -14,11 +14,7 @@ import androidx.core.app.NotificationCompat
 import fi.iki.elonen.NanoHTTPD
 import java.io.IOException
 
-/**
- * Foreground service that hosts [TabletFileServer], the reverse of the laptop's server: it
- * lets the laptop browse/download from the tablet's own public folders (Camera, Download,
- * Pictures, Documents), scoped and token-authed the same way the laptop scopes its shares.
- */
+/** Foreground service that keeps [TabletFileServer] running while tablet sharing is on. */
 class PairbridgeService : Service() {
 
     private var server: TabletFileServer? = null
@@ -49,11 +45,11 @@ class PairbridgeService : Service() {
 
     private fun startFileServer() {
         if (server != null) return
-        if (!Environment.isExternalStorageManager()) {
+        if (!hasAllFilesAccess()) {
             Log.w(TAG, "not starting tablet file server: All files access not granted")
             return
         }
-        val token = CredentialStore(this).token
+        val token = LaptopConnection.get(this).credentials.token
         if (token == null) {
             Log.w(TAG, "not starting tablet file server: not paired yet")
             return
@@ -69,7 +65,7 @@ class PairbridgeService : Service() {
     }
 
     private fun buildNotification(): Notification {
-        val credentialStore = CredentialStore(this)
+        val credentialStore = LaptopConnection.get(this).credentials
         val text = when {
             !credentialStore.isPaired -> "Not paired"
             server != null -> "Connected to ${credentialStore.host} • sharing tablet files"
@@ -84,7 +80,6 @@ class PairbridgeService : Service() {
     }
 
     private fun createNotificationChannel() {
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val channel = NotificationChannel(
             CHANNEL_ID,
             "Pairbridge connection",
@@ -100,3 +95,6 @@ class PairbridgeService : Service() {
         private const val NOTIFICATION_ID = 1
     }
 }
+
+/** "All files access" (Android 11+) is what lets [TabletFileServer] read the tablet's public folders. */
+fun hasAllFilesAccess() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R && Environment.isExternalStorageManager()

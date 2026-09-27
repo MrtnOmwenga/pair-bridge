@@ -6,7 +6,7 @@ import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Build
 import android.os.Bundle
-import android.os.Environment
+import android.provider.DocumentsContract
 import android.provider.Settings
 import android.view.View
 import android.view.animation.DecelerateInterpolator
@@ -19,77 +19,124 @@ import androidx.lifecycle.lifecycleScope
 import com.google.android.material.button.MaterialButton
 import com.google.android.material.progressindicator.CircularProgressIndicator
 import com.google.android.material.textfield.TextInputEditText
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
-/** One-time setup: enter the laptop's address + token, verify it's reachable, store it. */
+/** Pairs with the laptop (by scanning the code from `server.py pair`, or by hand) and toggles tablet sharing. */
 class PairingActivity : AppCompatActivity() {
 
-    private lateinit var credentialStore: CredentialStore
+    private lateinit var laptop: LaptopConnection
     private lateinit var shareButton: MaterialButton
     private lateinit var shareStatusText: TextView
+    private lateinit var hostInput: TextInputEditText
+    private lateinit var portInput: TextInputEditText
+    private lateinit var tokenInput: TextInputEditText
+    private lateinit var statusProgress: CircularProgressIndicator
+    private lateinit var statusIcon: View
+    private lateinit var statusText: TextView
 
     private val nearbyWifiPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { refreshShareStatus() }
 
+    private val scanLauncher = registerForActivityResult(ScanContract()) { result ->
+        result.contents?.let(::onPairingCode)
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_pairing)
-        credentialStore = CredentialStore(this)
+        laptop = LaptopConnection.get(this)
 
-        val logo = findViewById<View>(R.id.logo)
-        val title = findViewById<View>(R.id.title)
-        val subtitle = findViewById<View>(R.id.subtitle)
-        val formCard = findViewById<View>(R.id.formCard)
-        val statusRow = findViewById<View>(R.id.statusRow)
-        val hostInput = findViewById<TextInputEditText>(R.id.hostInput)
-        val portInput = findViewById<TextInputEditText>(R.id.portInput)
-        val tokenInput = findViewById<TextInputEditText>(R.id.tokenInput)
-        val statusProgress = findViewById<CircularProgressIndicator>(R.id.statusProgress)
-        val statusIcon = findViewById<View>(R.id.statusIcon)
-        val statusText = findViewById<TextView>(R.id.statusText)
-        val pairButton = findViewById<MaterialButton>(R.id.pairButton)
+        hostInput = findViewById(R.id.hostInput)
+        portInput = findViewById(R.id.portInput)
+        tokenInput = findViewById(R.id.tokenInput)
+        statusProgress = findViewById(R.id.statusProgress)
+        statusIcon = findViewById(R.id.statusIcon)
+        statusText = findViewById(R.id.statusText)
         shareButton = findViewById(R.id.shareButton)
         shareStatusText = findViewById(R.id.shareStatusText)
 
-        animateEntrance(logo, title, subtitle, formCard, statusRow, findViewById(R.id.shareCard))
+        animateEntrance(
+            findViewById(R.id.logo),
+            findViewById(R.id.title),
+            findViewById(R.id.subtitle),
+            findViewById(R.id.formCard),
+            findViewById(R.id.statusRow),
+            findViewById(R.id.shareCard),
+        )
 
+        if (!supportsTabletSharing()) findViewById<View>(R.id.shareCard).visibility = View.GONE
         shareButton.setOnClickListener { view ->
             bounce(view)
             onShareButtonClicked()
         }
 
-        if (credentialStore.isPaired) {
-            hostInput.setText(credentialStore.host)
-            portInput.setText(credentialStore.port.toString())
-            setStatus(statusProgress, statusIcon, statusText, State.SUCCESS, getString(R.string.status_paired, credentialStore.host))
+        val credentials = laptop.credentials
+        if (credentials.isPaired) {
+            hostInput.setText(credentials.host)
+            portInput.setText(credentials.port.toString())
+            setStatus(State.SUCCESS, getString(R.string.status_paired, credentials.host))
         }
 
-        pairButton.setOnClickListener { view ->
+        findViewById<MaterialButton>(R.id.scanButton).setOnClickListener { view ->
+            bounce(view)
+            scanLauncher.launch(
+                ScanOptions()
+                    .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                    .setPrompt(getString(R.string.scan_prompt))
+                    .setBeepEnabled(false)
+                    .setOrientationLocked(false),
+            )
+        }
+
+        findViewById<MaterialButton>(R.id.pairButton).setOnClickListener { view ->
             bounce(view)
             val host = hostInput.text.toString().trim()
             val port = portInput.text.toString().trim().toIntOrNull() ?: CredentialStore.DEFAULT_PORT
             val token = tokenInput.text.toString().trim()
-
             if (host.isEmpty() || token.isEmpty()) {
-                setStatus(statusProgress, statusIcon, statusText, State.ERROR, "Host and token are required")
+                setStatus(State.ERROR, "Host and token are required")
                 return@setOnClickListener
             }
+            pair(host, port, token)
+        }
+    }
 
-            setStatus(statusProgress, statusIcon, statusText, State.LOADING, getString(R.string.status_pairing))
-            lifecycleScope.launch {
-                val reachable = withContext(Dispatchers.IO) {
-                    runCatching { LaptopClient(host, port, token).checkHealth() }.getOrDefault(false)
-                }
-                if (reachable) {
-                    credentialStore.host = host
-                    credentialStore.port = port
-                    credentialStore.token = token
-                    setStatus(statusProgress, statusIcon, statusText, State.SUCCESS, getString(R.string.status_paired, host))
+    /** Pairing codes look like pairbridge://pair?host=…&port=…&token=…&id=… */
+    private fun onPairingCode(contents: String) {
+        val uri = Uri.parse(contents)
+        val host = uri.getQueryParameter("host")
+        val port = uri.getQueryParameter("port")?.toIntOrNull()
+        val token = uri.getQueryParameter("token")
+        if (uri.scheme != "pairbridge" || uri.host != "pair" || host == null || port == null || token == null) {
+            setStatus(State.ERROR, getString(R.string.error_bad_code))
+            return
+        }
+        hostInput.setText(host)
+        portInput.setText(port.toString())
+        tokenInput.setText(token)
+        pair(host, port, token)
+    }
+
+    /** Saves the pairing only after an authenticated request succeeds, so a wrong token is caught here. */
+    private fun pair(host: String, port: Int, token: String) {
+        setStatus(State.LOADING, getString(R.string.status_pairing))
+        lifecycleScope.launch {
+            val result = withContext(Dispatchers.IO) { runCatching { LaptopClient(host, port, token).listRoots() } }
+            result.onSuccess { roots ->
+                laptop.credentials.savePairing(host, port, token, roots.serverId)
+                contentResolver.notifyChange(DocumentsContract.buildRootsUri(LaptopDocumentsProvider.AUTHORITY), null)
+                setStatus(State.SUCCESS, getString(R.string.status_paired, host))
+            }.onFailure { e ->
+                val message = if (e is LaptopClientException && e.code == 401) {
+                    getString(R.string.error_token_rejected)
                 } else {
-                    setStatus(statusProgress, statusIcon, statusText, State.ERROR, getString(R.string.status_error, "Could not reach $host:$port"))
+                    getString(R.string.error_unreachable, "$host:$port")
                 }
+                setStatus(State.ERROR, message)
             }
         }
     }
@@ -110,15 +157,15 @@ class PairingActivity : AppCompatActivity() {
             nearbyWifiPermissionLauncher.launch(Manifest.permission.NEARBY_WIFI_DEVICES)
             return
         }
-        if (!Environment.isExternalStorageManager()) {
+        if (!hasAllFilesAccess()) {
             val intent = Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION).apply {
                 data = Uri.parse("package:$packageName")
             }
             startActivity(intent)
             return
         }
-        credentialStore.sharingEnabled = !credentialStore.sharingEnabled
-        if (credentialStore.sharingEnabled) {
+        laptop.credentials.sharingEnabled = !laptop.credentials.sharingEnabled
+        if (laptop.credentials.sharingEnabled) {
             startPairbridgeService()
         } else {
             stopService(Intent(this, PairbridgeService::class.java))
@@ -127,32 +174,25 @@ class PairingActivity : AppCompatActivity() {
     }
 
     private fun startPairbridgeService() {
-        val intent = Intent(this, PairbridgeService::class.java)
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            startForegroundService(intent)
-        } else {
-            startService(intent)
-        }
+        startForegroundService(Intent(this, PairbridgeService::class.java))
     }
 
+    // Serving the tablet's folders relies on "All files access", which exists from Android 11.
+    private fun supportsTabletSharing() = Build.VERSION.SDK_INT >= Build.VERSION_CODES.R
+
     private fun refreshShareStatus() {
-        if (!hasNearbyWifiPermission()) {
+        if (!supportsTabletSharing()) return
+        if (!hasNearbyWifiPermission() || !hasAllFilesAccess()) {
             shareButton.text = getString(R.string.action_grant_access)
             shareStatusText.text = getString(R.string.share_status_needs_permission)
             shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
             return
         }
-        if (!Environment.isExternalStorageManager()) {
-            shareButton.text = getString(R.string.action_grant_access)
-            shareStatusText.text = getString(R.string.share_status_needs_permission)
-            shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_neutral))
-            return
-        }
-        if (credentialStore.sharingEnabled) {
+        if (laptop.credentials.sharingEnabled) {
             shareButton.text = getString(R.string.action_stop_sharing)
             shareStatusText.text = getString(R.string.share_status_on, TabletFileServer.PORT)
             shareStatusText.setTextColor(ContextCompat.getColor(this, R.color.status_success))
-            if (credentialStore.isPaired) startPairbridgeService()
+            if (laptop.credentials.isPaired) startPairbridgeService()
         } else {
             shareButton.text = getString(R.string.action_start_sharing)
             shareStatusText.text = getString(R.string.share_status_off)
@@ -162,28 +202,21 @@ class PairingActivity : AppCompatActivity() {
 
     private enum class State { LOADING, SUCCESS, ERROR }
 
-    private fun setStatus(
-        progress: CircularProgressIndicator,
-        icon: View,
-        text: TextView,
-        state: State,
-        message: String,
-    ) {
-        progress.visibility = if (state == State.LOADING) View.VISIBLE else View.GONE
-        icon.visibility = if (state == State.SUCCESS || state == State.ERROR) View.VISIBLE else View.GONE
-        if (icon is ImageView) {
-            val res = if (state == State.SUCCESS) R.drawable.ic_status_success else R.drawable.ic_status_error
-            icon.setImageResource(res)
-        }
+    private fun setStatus(state: State, message: String) {
+        statusProgress.visibility = if (state == State.LOADING) View.VISIBLE else View.GONE
+        statusIcon.visibility = if (state == State.LOADING) View.GONE else View.VISIBLE
+        (statusIcon as? ImageView)?.setImageResource(
+            if (state == State.SUCCESS) R.drawable.ic_status_success else R.drawable.ic_status_error,
+        )
         val color = when (state) {
             State.SUCCESS -> R.color.status_success
             State.ERROR -> R.color.status_error
-            else -> R.color.status_neutral
+            State.LOADING -> R.color.status_neutral
         }
-        text.setTextColor(ContextCompat.getColor(this, color))
-        text.text = message
-        icon.alpha = 0f
-        icon.animate().alpha(1f).setDuration(200).start()
+        statusText.setTextColor(ContextCompat.getColor(this, color))
+        statusText.text = message
+        statusIcon.alpha = 0f
+        statusIcon.animate().alpha(1f).setDuration(200).start()
     }
 
     private fun bounce(view: View) {

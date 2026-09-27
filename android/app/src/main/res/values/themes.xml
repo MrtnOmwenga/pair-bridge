@@ -11,6 +11,13 @@
         <item name="android:windowLightStatusBar">false</item>
     </style>
 
+    <style name="Theme.Pairbridge.Share" parent="Theme.Material3.Dark.Dialog">
+        <item name="colorPrimary">@color/pairbridge_accent</item>
+        <item name="colorSurface">@color/bg_top</item>
+        <item name="android:windowBackground">@drawable/bg_dialog</item>
+        <item name="windowNoTitle">true</item>
+    </style>
+
     <style name="PairbridgeTextInput" parent="Widget.Material3.TextInputLayout.OutlinedBox">
         <item name="boxStrokeColor">@color/pairbridge_accent</item>
         <item name="hintTextColor">@color/text_secondary</item>

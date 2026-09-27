@@ -3,12 +3,16 @@ package dev.pairbridge.app
 import android.util.Log
 import java.io.IOException
 import java.io.InputStream
-import java.net.URLEncoder
 import java.util.concurrent.TimeUnit
-import okhttp3.ConnectionPool
-import okhttp3.Dispatcher
+import okhttp3.HttpUrl
+import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import okhttp3.RequestBody
+import okhttp3.RequestBody.Companion.toRequestBody
+import okhttp3.Response
+import okio.BufferedSink
+import okio.source
 import org.json.JSONObject
 
 data class FileEntry(
@@ -20,138 +24,129 @@ data class FileEntry(
 
 data class ShareRoot(val id: String, val name: String)
 
-class LaptopClientException(message: String) : IOException(message)
+data class Roots(val serverId: String?, val roots: List<ShareRoot>)
+
+/** A file or folder the server wrote, created or renamed, at its final path. */
+data class SavedEntry(val path: String, val entry: FileEntry)
+
+class LaptopClientException(val code: Int, message: String) : IOException(message)
 
 private const val TAG = "Pairbridge"
+private val OCTET_STREAM = "application/octet-stream".toMediaType()
 
-/** Thin HTTP client for talking to the Pairbridge laptop server. */
-class LaptopClient(private val host: String, private val port: Int, private val token: String) {
-
-    // Shared so both clients below reuse the same pooled TCP connections.
-    private val connectionPool = ConnectionPool()
+/** HTTP client for the Pairbridge laptop server. Blocking; call it off the main thread. */
+class LaptopClient(host: String, port: Int, private val token: String) {
 
     private val client = OkHttpClient.Builder()
-        .connectionPool(connectionPool)
         .connectTimeout(5, TimeUnit.SECONDS)
-        .readTimeout(15, TimeUnit.SECONDS)
-        .build()
-
-    // The picker fires a burst of thumbnail fetches while scrolling a folder (one full
-    // download per visible image). Those must never queue in front of an interactive
-    // stat/list/download triggered by the user actually tapping a file, so thumbnails get
-    // their own capped Dispatcher instead of sharing OkHttp's default one with everything else.
-    private val thumbnailClient = client.newBuilder()
-        .dispatcher(Dispatcher().apply { maxRequests = 3; maxRequestsPerHost = 3 })
-        .build()
-
-    // Background folder preloading is the lowest priority. Kept to a single connection: a
-    // handful of parallel multi-MB downloads on a local dev server can saturate the LAN link
-    // badly enough that a concurrent interactive fetch (a tap on an uncached file) slows to a
-    // crawl even though it's on its own dispatcher and never queues behind preload requests —
-    // separate dispatchers avoid queueing contention, not bandwidth contention.
-    private val preloadClient = client.newBuilder()
-        .dispatcher(Dispatcher().apply { maxRequests = 1; maxRequestsPerHost = 1 })
-        .build()
-
-    private val baseUrl = "http://$host:$port"
-
-    private fun authorizedRequest(url: String): Request =
-        Request.Builder().url(url).header("Authorization", "Bearer $token").build()
-
-    private fun encode(value: String): String = URLEncoder.encode(value, "UTF-8")
-
-    private fun <T> timed(label: String, block: () -> T): T {
-        val start = System.nanoTime()
-        Log.d(TAG, "-> $label")
-        try {
-            val result = block()
+        .readTimeout(30, TimeUnit.SECONDS)
+        .addInterceptor { chain ->
+            val request = chain.request()
+            val start = System.nanoTime()
+            val response = chain.proceed(request)
             val ms = (System.nanoTime() - start) / 1_000_000
-            Log.d(TAG, "<- $label (${ms}ms)")
-            return result
-        } catch (e: Exception) {
-            val ms = (System.nanoTime() - start) / 1_000_000
-            Log.d(TAG, "x  $label failed after ${ms}ms: ${e.message}")
-            throw e
+            Log.d(TAG, "${request.method} ${request.url.encodedPath} -> ${response.code} in ${ms}ms")
+            response
         }
+        .build()
+
+    private val baseUrl = HttpUrl.Builder().scheme("http").host(host).port(port).build()
+
+    private fun url(path: String, vararg params: Pair<String, String>): HttpUrl =
+        baseUrl.newBuilder().addPathSegments(path).apply {
+            for ((key, value) in params) addQueryParameter(key, value)
+        }.build()
+
+    private fun request(url: HttpUrl): Request.Builder =
+        Request.Builder().url(url).header("Authorization", "Bearer $token")
+
+    private fun execute(request: Request): Response {
+        val response = client.newCall(request).execute()
+        if (!response.isSuccessful) {
+            val detail = response.body?.string()?.let { runCatching { JSONObject(it).getString("detail") }.getOrNull() }
+            response.close()
+            throw LaptopClientException(response.code, "${request.url.encodedPath}: HTTP ${response.code} ${detail ?: ""}".trim())
+        }
+        return response
     }
 
-    fun checkHealth(): Boolean = timed("GET /health") {
-        val request = Request.Builder().url("$baseUrl/health").build()
-        client.newCall(request).execute().use { response -> response.isSuccessful }
-    }
+    private fun json(request: Request): JSONObject =
+        execute(request).use { JSONObject(it.body?.string() ?: throw IOException("empty response")) }
 
-    fun listRoots(): List<ShareRoot> = timed("GET /roots") {
-        val request = authorizedRequest("$baseUrl/roots")
-        client.newCall(request).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw LaptopClientException("roots failed: HTTP ${response.code}")
-            }
-            val body = response.body?.string() ?: throw LaptopClientException("empty response")
-            val roots = JSONObject(body).getJSONArray("roots")
-            (0 until roots.length()).map { i ->
+    private fun parseEntry(json: JSONObject) = FileEntry(
+        name = json.getString("name"),
+        isDir = json.getBoolean("is_dir"),
+        size = json.getLong("size"),
+        mtime = json.getLong("mtime"),
+    )
+
+    private fun parseSaved(json: JSONObject) = SavedEntry(json.getString("path"), parseEntry(json))
+
+    fun listRoots(): Roots {
+        val json = json(request(url("roots")).build())
+        val roots = json.getJSONArray("roots")
+        return Roots(
+            serverId = json.optString("server_id").ifEmpty { null },
+            roots = (0 until roots.length()).map { i ->
                 val root = roots.getJSONObject(i)
                 ShareRoot(id = root.getString("id"), name = root.getString("name"))
-            }
-        }
+            },
+        )
     }
 
-    fun statFile(rootId: String, path: String): FileEntry = timed("GET /files/stat?root=$rootId&path=$path") {
-        val url = "$baseUrl/files/stat?root=${encode(rootId)}&path=${encode(path)}"
-        client.newCall(authorizedRequest(url)).execute().use { response ->
-            if (!response.isSuccessful) {
-                throw LaptopClientException("stat failed: HTTP ${response.code}")
-            }
-            val body = response.body?.string() ?: throw LaptopClientException("empty response")
-            val entry = JSONObject(body)
-            FileEntry(
-                name = entry.getString("name"),
-                isDir = entry.getBoolean("is_dir"),
-                size = entry.getLong("size"),
-                mtime = entry.getLong("mtime"),
-            )
-        }
+    fun listFiles(rootId: String, path: String): List<FileEntry> {
+        val entries = json(request(url("files", "root" to rootId, "path" to path)).build()).getJSONArray("entries")
+        return (0 until entries.length()).map { parseEntry(entries.getJSONObject(it)) }
     }
 
-    fun listFiles(rootId: String, path: String): List<FileEntry> =
-        timed("GET /files?root=$rootId&path=$path") {
-            val url = "$baseUrl/files?root=${encode(rootId)}&path=${encode(path)}"
-            client.newCall(authorizedRequest(url)).execute().use { response ->
-                if (!response.isSuccessful) {
-                    throw LaptopClientException("list failed: HTTP ${response.code}")
-                }
-                val body = response.body?.string() ?: throw LaptopClientException("empty response")
-                val entries = JSONObject(body).getJSONArray("entries")
-                (0 until entries.length()).map { i ->
-                    val entry = entries.getJSONObject(i)
-                    FileEntry(
-                        name = entry.getString("name"),
-                        isDir = entry.getBoolean("is_dir"),
-                        size = entry.getLong("size"),
-                        mtime = entry.getLong("mtime"),
-                    )
-                }
-            }
+    fun stat(rootId: String, path: String): FileEntry =
+        parseEntry(json(request(url("files/stat", "root" to rootId, "path" to path)).build()))
+
+    /** The caller must close the returned stream. */
+    fun download(rootId: String, path: String): InputStream {
+        val response = execute(request(url("files/download", "root" to rootId, "path" to path)).build())
+        return response.body?.byteStream() ?: throw IOException("empty download body")
+    }
+
+    /** A JPEG no larger than [size] on its longest side, rendered by the laptop. */
+    fun thumbnail(rootId: String, path: String, size: Int): ByteArray =
+        execute(request(url("files/thumb", "root" to rootId, "path" to path, "size" to size.toString())).build())
+            .use { it.body?.bytes() ?: throw IOException("empty thumbnail") }
+
+    /** Replaces the file's content with [input]. The laptop only swaps the file in once the upload completes. */
+    fun write(rootId: String, path: String, input: InputStream): SavedEntry =
+        parseSaved(json(request(url("files/content", "root" to rootId, "path" to path)).put(streamBody(input)).build()))
+
+    fun create(rootId: String, parentPath: String, name: String, isDir: Boolean): SavedEntry {
+        val kind = if (isDir) "dir" else "file"
+        val url = url("files/create", "root" to rootId, "parent" to parentPath, "name" to name, "kind" to kind)
+        return parseSaved(json(request(url).post(EMPTY_BODY).build()))
+    }
+
+    fun rename(rootId: String, path: String, newName: String): SavedEntry =
+        parseSaved(json(request(url("files/rename", "root" to rootId, "path" to path, "name" to newName)).post(EMPTY_BODY).build()))
+
+    fun delete(rootId: String, path: String) {
+        execute(request(url("files", "root" to rootId, "path" to path)).delete().build()).close()
+    }
+
+    /** Uploads into the laptop's inbox folder; the laptop picks a free name if [name] is taken. */
+    fun sendToInbox(name: String, input: InputStream, length: Long): SavedEntry =
+        parseSaved(json(request(url("inbox", "name" to name)).post(streamBody(input, length)).build()))
+
+    private fun streamBody(input: InputStream, length: Long = -1L) = object : RequestBody() {
+        override fun contentType() = OCTET_STREAM
+        override fun contentLength() = length
+        // Not closed here: the caller owns the stream (and, for pipes, the file descriptor behind it).
+        override fun writeTo(sink: BufferedSink) {
+            sink.writeAll(input.source())
         }
 
-    private fun download(httpClient: OkHttpClient, label: String, rootId: String, path: String): InputStream =
-        timed(label) {
-            val url = "$baseUrl/files/download?root=${encode(rootId)}&path=${encode(path)}"
-            val response = httpClient.newCall(authorizedRequest(url)).execute()
-            if (!response.isSuccessful) {
-                response.close()
-                throw LaptopClientException("download failed: HTTP ${response.code}")
-            }
-            response.body?.byteStream() ?: throw LaptopClientException("empty download body")
-        }
+        // The stream can be read only once, so OkHttp must not replay this body on a retry.
+        override fun isOneShot() = true
+    }
 
-    fun downloadStream(rootId: String, path: String): InputStream =
-        download(client, "GET /files/download?root=$rootId&path=$path", rootId, path)
-
-    /** Same as [downloadStream] but queued on the low-concurrency thumbnail dispatcher. */
-    fun downloadForThumbnail(rootId: String, path: String): InputStream =
-        download(thumbnailClient, "GET(thumb) /files/download?root=$rootId&path=$path", rootId, path)
-
-    /** Same as [downloadStream] but queued on the lowest-priority preload dispatcher. */
-    fun downloadForPreload(rootId: String, path: String): InputStream =
-        download(preloadClient, "GET(preload) /files/download?root=$rootId&path=$path", rootId, path)
+    private companion object {
+        val EMPTY_BODY = ByteArray(0).toRequestBody()
+    }
 }

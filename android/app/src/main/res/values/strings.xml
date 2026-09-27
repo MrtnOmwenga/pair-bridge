@@ -7,10 +7,15 @@
     <string name="hint_port">Port</string>
     <string name="hint_token">Token</string>
     <string name="action_pair">Pair</string>
+    <string name="action_scan">Scan pairing code</string>
+    <string name="scan_prompt">Scan the code printed by: python3 server.py pair</string>
+    <string name="or_enter_manually">or enter the details by hand</string>
+    <string name="error_bad_code">That isn\'t a Pairbridge pairing code</string>
+    <string name="error_token_rejected">The laptop rejected the token</string>
+    <string name="error_unreachable">Could not reach %1$s</string>
     <string name="status_idle">Not paired yet</string>
     <string name="status_paired">Connected to %1$s</string>
     <string name="status_pairing">Connecting…</string>
-    <string name="status_error">%1$s</string>
 
     <string name="share_title">Share tablet files</string>
     <string name="share_subtitle">Let the laptop browse this tablet\'s Camera, Download, Pictures, and Documents folders</string>
@@ -20,4 +25,15 @@
     <string name="share_status_off">Not sharing</string>
     <string name="share_status_needs_permission">Needs \"All files access\" permission</string>
     <string name="share_status_on">Sharing on port %1$d</string>
+
+    <string name="share_label">Send to laptop</string>
+    <string name="share_connecting">Connecting to laptop…</string>
+    <string name="share_sending">Sending %1$d of %2$d</string>
+    <string name="share_not_paired">Pair with your laptop first</string>
+    <string name="share_nothing">Nothing to send</string>
+    <string name="share_failed">Sending failed: %1$s</string>
+    <plurals name="share_done">
+        <item quantity="one">Sent to the laptop\'s \"%2$s\" folder</item>
+        <item quantity="other">Sent %1$d files to the laptop\'s \"%2$s\" folder</item>
+    </plurals>
 </resources>

@@ -5,7 +5,7 @@ import android.content.SharedPreferences
 import androidx.security.crypto.EncryptedSharedPreferences
 import androidx.security.crypto.MasterKey
 
-/** Encrypted storage for the laptop's address and auth token (Android Keystore-backed). */
+/** Pairing details, encrypted at rest with an Android Keystore key. */
 class CredentialStore(context: Context) {
 
     private val prefs: SharedPreferences = run {
@@ -33,6 +33,11 @@ class CredentialStore(context: Context) {
         get() = prefs.getString(KEY_TOKEN, null)
         set(value) = prefs.edit().putString(KEY_TOKEN, value).apply()
 
+    /** Identifies the laptop on mDNS, so it can be found again if its address changes. */
+    var serverId: String?
+        get() = prefs.getString(KEY_SERVER_ID, null)
+        set(value) = prefs.edit().putString(KEY_SERVER_ID, value).apply()
+
     val isPaired: Boolean
         get() = !host.isNullOrBlank() && !token.isNullOrBlank()
 
@@ -40,14 +45,20 @@ class CredentialStore(context: Context) {
         get() = prefs.getBoolean(KEY_SHARING_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_SHARING_ENABLED, value).apply()
 
-    fun clear() {
-        prefs.edit().clear().apply()
+    fun savePairing(host: String, port: Int, token: String, serverId: String?) {
+        prefs.edit()
+            .putString(KEY_HOST, host)
+            .putInt(KEY_PORT, port)
+            .putString(KEY_TOKEN, token)
+            .putString(KEY_SERVER_ID, serverId)
+            .apply()
     }
 
     companion object {
         private const val KEY_HOST = "host"
         private const val KEY_PORT = "port"
         private const val KEY_TOKEN = "token"
+        private const val KEY_SERVER_ID = "server_id"
         private const val KEY_SHARING_ENABLED = "sharing_enabled"
         const val DEFAULT_PORT = 8765
     }
