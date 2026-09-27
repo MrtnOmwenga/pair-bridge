@@ -7,6 +7,8 @@
     <string name="hint_port">Port</string>
     <string name="hint_token">Token</string>
     <string name="action_pair">Pair</string>
+    <string name="action_browse">Open laptop files</string>
+    <string name="error_no_files_app">No app on this device can browse files</string>
     <string name="action_scan">Scan pairing code</string>
     <string name="scan_prompt">Scan the code printed by: python3 server.py pair</string>
     <string name="or_enter_manually">or enter the details by hand</string>

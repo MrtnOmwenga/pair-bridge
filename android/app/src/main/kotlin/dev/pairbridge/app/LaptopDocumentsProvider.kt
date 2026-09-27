@@ -71,7 +71,7 @@ class LaptopDocumentsProvider : DocumentsProvider() {
         if (context == null || !laptop.credentials.isPaired) return cursor
 
         cursor.newRow().apply {
-            add(Root.COLUMN_ROOT_ID, "pairbridge-laptop")
+            add(Root.COLUMN_ROOT_ID, ROOT_ID)
             add(Root.COLUMN_ICON, R.drawable.ic_launcher_foreground)
             add(Root.COLUMN_TITLE, "Laptop")
             add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_CREATE)
@@ -370,6 +370,7 @@ class LaptopDocumentsProvider : DocumentsProvider() {
     companion object {
         private const val TAG = "Pairbridge"
         const val AUTHORITY = "dev.pairbridge.app.documents"
+        const val ROOT_ID = "pairbridge-laptop"
         private const val SEPARATOR = "::"
         private const val TOP_DOC_ID = "top"
 

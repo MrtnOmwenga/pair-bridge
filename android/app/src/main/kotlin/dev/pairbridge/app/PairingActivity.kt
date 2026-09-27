@@ -1,6 +1,7 @@
 package dev.pairbridge.app
 
 import android.Manifest
+import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.net.Uri
@@ -12,6 +13,7 @@ import android.view.View
 import android.view.animation.DecelerateInterpolator
 import android.widget.ImageView
 import android.widget.TextView
+import android.widget.Toast
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -37,6 +39,7 @@ class PairingActivity : AppCompatActivity() {
     private lateinit var statusProgress: CircularProgressIndicator
     private lateinit var statusIcon: View
     private lateinit var statusText: TextView
+    private lateinit var browseButton: MaterialButton
 
     private val nearbyWifiPermissionLauncher =
         registerForActivityResult(ActivityResultContracts.RequestPermission()) { refreshShareStatus() }
@@ -58,6 +61,8 @@ class PairingActivity : AppCompatActivity() {
         statusText = findViewById(R.id.statusText)
         shareButton = findViewById(R.id.shareButton)
         shareStatusText = findViewById(R.id.shareStatusText)
+        browseButton = findViewById(R.id.browseButton)
+        browseButton.setOnClickListener { openLaptopFiles() }
 
         animateEntrance(
             findViewById(R.id.logo),
@@ -79,6 +84,7 @@ class PairingActivity : AppCompatActivity() {
             hostInput.setText(credentials.host)
             portInput.setText(credentials.port.toString())
             setStatus(State.SUCCESS, getString(R.string.status_paired, credentials.host))
+            browseButton.visibility = View.VISIBLE
         }
 
         findViewById<MaterialButton>(R.id.scanButton).setOnClickListener { view ->
@@ -130,6 +136,7 @@ class PairingActivity : AppCompatActivity() {
                 laptop.credentials.savePairing(host, port, token, roots.serverId)
                 contentResolver.notifyChange(DocumentsContract.buildRootsUri(LaptopDocumentsProvider.AUTHORITY), null)
                 setStatus(State.SUCCESS, getString(R.string.status_paired, host))
+                browseButton.visibility = View.VISIBLE
             }.onFailure { e ->
                 val message = if (e is LaptopClientException && e.code == 401) {
                     getString(R.string.error_token_rejected)
@@ -150,6 +157,25 @@ class PairingActivity : AppCompatActivity() {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return true
         return ContextCompat.checkSelfPermission(this, Manifest.permission.NEARBY_WIFI_DEVICES) ==
             PackageManager.PERMISSION_GRANTED
+    }
+
+    /**
+     * Opens Android's own Files app at the Laptop root. Vendor file managers (Xiaomi's among
+     * them) also claim this intent but don't list other apps' storage providers, and HyperOS
+     * hides the system Files app's icon, so the system app is targeted by package first.
+     */
+    private fun openLaptopFiles() {
+        val rootUri = DocumentsContract.buildRootUri(LaptopDocumentsProvider.AUTHORITY, LaptopDocumentsProvider.ROOT_ID)
+        val intent = Intent(Intent.ACTION_VIEW).setDataAndType(rootUri, DocumentsContract.Root.MIME_TYPE_ITEM)
+        for (pkg in listOf("com.google.android.documentsui", "com.android.documentsui", null)) {
+            try {
+                startActivity(Intent(intent).setPackage(pkg))
+                return
+            } catch (e: ActivityNotFoundException) {
+                continue
+            }
+        }
+        Toast.makeText(this, R.string.error_no_files_app, Toast.LENGTH_LONG).show()
     }
 
     private fun onShareButtonClicked() {
