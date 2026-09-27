@@ -1,5 +1,7 @@
 # Pairbridge
 
+[![CI](https://github.com/MrtnOmwenga/pair-bridge/actions/workflows/ci.yml/badge.svg)](https://github.com/MrtnOmwenga/pair-bridge/actions/workflows/ci.yml)
+
 Share files between a Linux PC and an Android tablet over the local network, without a cloud
 service or a cable.
 
