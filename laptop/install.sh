@@ -43,13 +43,6 @@ echo "  logs:    journalctl --user -u ${SERVICE_NAME} -f"
 echo "  stop:    systemctl --user disable --now ${SERVICE_NAME}"
 echo
 
-# Give the service a moment to write its config on first run.
+# The service creates ~/.pairbridge/config.json on first start; pairing reads the same file.
 sleep 1
-TOKEN=$("$PYTHON_BIN" -c "
-import json
-from pathlib import Path
-config = json.loads((Path.home() / '.pairbridge' / 'config.json').read_text())
-print(config['token'])
-" 2>/dev/null || echo "(not started yet — check 'systemctl --user status pairbridge')")
-echo "Pairing token: $TOKEN"
-echo "Enter this (and this machine's LAN IP) in the Pairbridge Android app to pair."
+"$PYTHON_BIN" "$SCRIPT_DIR/server.py" pair

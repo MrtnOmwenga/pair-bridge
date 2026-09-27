@@ -1,8 +1,10 @@
-fastapi==0.139.0
-uvicorn[standard]==0.51.0
-python-multipart==0.0.32
+fastapi==0.141.1
+uvicorn[standard]==0.54.0
+zeroconf==0.151.3
+segno==1.6.6
+pillow==12.3.0
 requests==2.33.1
 
 # Mounting the tablet's files (pairbridge_mount.py) additionally needs pyfuse3, which
-# compiles a C extension against libfuse3 — install fuse3-devel (Fedora) /
+# compiles a C extension against libfuse3: install fuse3-devel (Fedora) /
 # libfuse3-dev (Debian/Ubuntu) first, then: python3 -m pip install --user pyfuse3

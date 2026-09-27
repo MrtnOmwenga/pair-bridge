@@ -10,8 +10,9 @@ android/.cxx/
 
 # Python
 laptop/.venv/
-laptop/__pycache__/
+laptop/**/__pycache__/
 laptop/*.pyc
 
 # OS
 .DS_Store
+laptop/.pytest_cache/

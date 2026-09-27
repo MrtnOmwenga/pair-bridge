@@ -2,8 +2,7 @@
 read-only FUSE filesystem, using the same token issued during laptop->tablet pairing.
 
 Requires "tablet_host" (and optionally "tablet_port", default 8766) in
-~/.pairbridge/config.json — set it to the tablet's LAN IP once you know it (shown in the
-Pairbridge app's "Share tablet files" section).
+~/.pairbridge/config.json, set to the tablet's LAN IP (Android: Settings → About → Status).
 
 pyfuse3 needs libfuse3 at runtime; if it's not on the default library search path, run with:
     LD_LIBRARY_PATH=/usr/lib64 python3 pairbridge_mount.py <mountpoint>
