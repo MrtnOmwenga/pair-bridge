@@ -38,6 +38,11 @@ class CredentialStore(context: Context) {
         get() = prefs.getString(KEY_SERVER_ID, null)
         set(value) = prefs.edit().putString(KEY_SERVER_ID, value).apply()
 
+    /** The PC's name as the laptop reports it; titles the storage root in file pickers. */
+    var serverName: String?
+        get() = prefs.getString(KEY_SERVER_NAME, null)
+        set(value) = prefs.edit().putString(KEY_SERVER_NAME, value).apply()
+
     val isPaired: Boolean
         get() = !host.isNullOrBlank() && !token.isNullOrBlank()
 
@@ -45,12 +50,13 @@ class CredentialStore(context: Context) {
         get() = prefs.getBoolean(KEY_SHARING_ENABLED, false)
         set(value) = prefs.edit().putBoolean(KEY_SHARING_ENABLED, value).apply()
 
-    fun savePairing(host: String, port: Int, token: String, serverId: String?) {
+    fun savePairing(host: String, port: Int, token: String, serverId: String?, serverName: String?) {
         prefs.edit()
             .putString(KEY_HOST, host)
             .putInt(KEY_PORT, port)
             .putString(KEY_TOKEN, token)
             .putString(KEY_SERVER_ID, serverId)
+            .putString(KEY_SERVER_NAME, serverName)
             .apply()
     }
 
@@ -59,6 +65,7 @@ class CredentialStore(context: Context) {
         private const val KEY_PORT = "port"
         private const val KEY_TOKEN = "token"
         private const val KEY_SERVER_ID = "server_id"
+        private const val KEY_SERVER_NAME = "server_name"
         private const val KEY_SHARING_ENABLED = "sharing_enabled"
         const val DEFAULT_PORT = 8765
     }

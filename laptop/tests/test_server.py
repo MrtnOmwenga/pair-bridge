@@ -36,6 +36,7 @@ def client(server, shared):
         "port": 0,
         "token": TOKEN,
         "server_id": "abc",
+        "name": "Test PC",
         "max_upload_bytes": 1024,
         "inbox": {"root": "shared", "path": "From tablet"},
     }
@@ -54,6 +55,7 @@ def test_api_rejects_missing_or_wrong_token(client, headers):
 def test_list_roots(client):
     assert client.get("/roots", headers=AUTH).json() == {
         "server_id": "abc",
+        "server_name": "Test PC",
         "roots": [{"id": "shared", "name": "Shared"}],
     }
 

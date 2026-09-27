@@ -73,7 +73,7 @@ class LaptopDocumentsProvider : DocumentsProvider() {
         cursor.newRow().apply {
             add(Root.COLUMN_ROOT_ID, ROOT_ID)
             add(Root.COLUMN_ICON, R.drawable.ic_launcher_foreground)
-            add(Root.COLUMN_TITLE, "Laptop")
+            add(Root.COLUMN_TITLE, laptopName())
             add(Root.COLUMN_FLAGS, Root.FLAG_SUPPORTS_CREATE)
             add(Root.COLUMN_DOCUMENT_ID, TOP_DOC_ID)
         }
@@ -106,9 +106,14 @@ class LaptopDocumentsProvider : DocumentsProvider() {
         cursor.setNotificationUri(context!!.contentResolver, childrenUri(parentDocumentId))
 
         if (parentDocumentId == TOP_DOC_ID) {
-            val roots = network("list shared folders") { laptop.call { it.listRoots() }.roots }
-            rootNames = roots.associate { it.id to it.name }
-            roots.forEach { addRootFolderRow(cursor, docId(it.id, ""), it.name) }
+            val response = network("list shared folders") { laptop.call { it.listRoots() } }
+            rootNames = response.roots.associate { it.id to it.name }
+            response.roots.forEach { addRootFolderRow(cursor, docId(it.id, ""), it.name) }
+            // Picks up a rename of the PC without re-pairing.
+            if (response.serverName != null && response.serverName != laptop.credentials.serverName) {
+                laptop.credentials.serverName = response.serverName
+                context?.contentResolver?.notifyChange(DocumentsContract.buildRootsUri(AUTHORITY), null)
+            }
             return@logged cursor
         }
 
@@ -300,7 +305,9 @@ class LaptopDocumentsProvider : DocumentsProvider() {
         DocumentsContract.buildChildDocumentsUri(AUTHORITY, parentDocumentId)
 
     private fun addTopRow(cursor: MatrixCursor) =
-        addRow(cursor, TOP_DOC_ID, "Laptop", Document.MIME_TYPE_DIR, 0, 0, flags = 0)
+        addRow(cursor, TOP_DOC_ID, laptopName(), Document.MIME_TYPE_DIR, 0, 0, flags = 0)
+
+    private fun laptopName() = laptop.credentials.serverName ?: "Laptop"
 
     // Shared folders are fixed by the laptop's config, so they can hold new files but can't be
     // renamed or deleted from the tablet.

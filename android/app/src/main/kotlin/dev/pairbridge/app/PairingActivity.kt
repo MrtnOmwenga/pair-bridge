@@ -133,7 +133,7 @@ class PairingActivity : AppCompatActivity() {
         lifecycleScope.launch {
             val result = withContext(Dispatchers.IO) { runCatching { LaptopClient(host, port, token).listRoots() } }
             result.onSuccess { roots ->
-                laptop.credentials.savePairing(host, port, token, roots.serverId)
+                laptop.credentials.savePairing(host, port, token, roots.serverId, roots.serverName)
                 contentResolver.notifyChange(DocumentsContract.buildRootsUri(LaptopDocumentsProvider.AUTHORITY), null)
                 setStatus(State.SUCCESS, getString(R.string.status_paired, host))
                 browseButton.visibility = View.VISIBLE

@@ -24,7 +24,7 @@ data class FileEntry(
 
 data class ShareRoot(val id: String, val name: String)
 
-data class Roots(val serverId: String?, val roots: List<ShareRoot>)
+data class Roots(val serverId: String?, val serverName: String?, val roots: List<ShareRoot>)
 
 /** A file or folder the server wrote, created or renamed, at its final path. */
 data class SavedEntry(val path: String, val entry: FileEntry)
@@ -87,6 +87,7 @@ class LaptopClient(host: String, port: Int, private val token: String) {
         val roots = json.getJSONArray("roots")
         return Roots(
             serverId = json.optString("server_id").ifEmpty { null },
+            serverName = json.optString("server_name").ifEmpty { null },
             roots = (0 until roots.length()).map { i ->
                 val root = roots.getJSONObject(i)
                 ShareRoot(id = root.getString("id"), name = root.getString("name"))

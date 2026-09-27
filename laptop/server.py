@@ -6,7 +6,8 @@ Usage:
 
 Configuration lives in ~/.pairbridge/config.json (created on first run). Each entry in
 "shared_roots" is {"id", "name", "path"}; "inbox" is where files sent from the tablet's share
-sheet land. Restart the server after editing it.
+sheet land; the optional "name" overrides the PC name the tablet shows. Restart the server after
+editing it.
 """
 
 import json
@@ -98,6 +99,19 @@ def primary_ipv4() -> str:
         # connect() on UDP only picks a route; no packet is sent.
         s.connect(("192.0.2.1", 9))
         return s.getsockname()[0]
+
+
+def machine_name() -> str:
+    """The PC's display name: systemd's pretty hostname if set, else the short hostname."""
+    try:
+        for line in Path("/etc/machine-info").read_text().splitlines():
+            if line.startswith("PRETTY_HOSTNAME="):
+                pretty = line.split("=", 1)[1].strip().strip('"')
+                if pretty:
+                    return pretty
+    except OSError:
+        pass
+    return socket.gethostname().split(".")[0]
 
 
 def validate_name(name: str) -> str:
@@ -210,6 +224,7 @@ def create_app(config: dict, advertise: bool = False) -> FastAPI:
     def list_roots():
         return {
             "server_id": config["server_id"],
+            "server_name": config.get("name") or machine_name(),
             "roots": [{"id": root_id, "name": root_names[root_id]} for root_id in roots],
         }
 
